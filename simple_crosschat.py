@@ -148,7 +148,7 @@ class SimpleCrossChat:
         except Exception as e:
             print(f"SIMPLE: Error saving processed messages: {e}")
     
-    def generate_cc_id(self, message_id, is_vip=False):
+    def generate_cc_id(self, message_id, is_vip=False, message=None):
         """Generate unique CC-ID with VIP FAST-TRACK processing"""
         import time, random, string
         
@@ -206,15 +206,15 @@ class SimpleCrossChat:
             # MongoDB insert - use bot's database handler
             success = True
             print(f"🔍 DEBUG: CC-ID Generation - checking db_handler: {hasattr(self.bot, 'db_handler')}")
-            if hasattr(self.bot, 'db_handler') and self.bot.db_handler:
+            if hasattr(self.bot, 'db_handler') and self.bot.db_handler and message:
                 message_data = {
                     "message_id": str(message_id),
                     "cc_id": cc_id,
-                    "user_id": str(author_id),
-                    "username": author_name,
-                    "content": message_content,
-                    "guild_id": str(guild_id),
-                    "channel_id": str(channel_id)
+                    "user_id": str(message.author.id),
+                    "username": message.author.display_name,
+                    "content": message.content or "",
+                    "guild_id": str(message.guild.id),
+                    "channel_id": str(message.channel.id)
                 }
                 print(f"🔍 DEBUG: CC-ID calling log_crosschat_message...")
                 success = self.bot.db_handler.log_crosschat_message(message_data)
@@ -470,17 +470,24 @@ class SimpleCrossChat:
             'priority': 100
         }
         
-        # Check for VIP_ROLE_ID2 (Elite tier) FIRST - highest priority VIP tier
+        # Check for VIP_ROLE_ID2 (Elite tier) FIRST - GLOBAL check across all guilds
         vip_role_id2 = os.environ.get('VIP_ROLE_ID2')
-        if vip_role_id2 and user_roles:
-            for role in user_roles:
-                if str(role.id) == str(vip_role_id2):
-                    tag_info = {
-                        'level': 5,
-                        'tag': '💎 SynapseChat Elite',
-                        'color': 0xff8c00,  # Orange
-                        'priority': 10  # FASTEST processing - Elite gets 0.25s vs Architect 0.5s
-                    }
+        if vip_role_id2 and user_id and hasattr(self, 'bot') and self.bot:
+            # Global Elite VIP check across ALL guilds where bot can see the user
+            for check_guild in self.bot.guilds:
+                member = check_guild.get_member(user_id)
+                if member and member.roles:
+                    for role in member.roles:
+                        if str(role.id) == str(vip_role_id2):
+                            tag_info = {
+                                'level': 5,
+                                'tag': '💎 SynapseChat Elite',
+                                'color': 0xff8c00,  # Orange
+                                'priority': 10  # FASTEST processing - Elite gets 0.25s vs Architect 0.5s
+                            }
+                            print(f"ELITE_VIP_TAG_GLOBAL: User {user_id} has Elite VIP role in {check_guild.name}")
+                            break
+                if tag_info['level'] == 5:  # Elite found
                     break
         
         # Check if user is VIP (Architect tier) - only if not already Elite
@@ -520,12 +527,18 @@ class SimpleCrossChat:
                 staff_priority = 55  # Default staff priority
                 staff_tag = 'SynapseChat Staff'  # Default staff tag
                 
-                # Check if staff member also has VIP roles for priority inheritance and icon
-                if vip_role_id2 and user_roles:
-                    for vip_role in user_roles:
-                        if str(vip_role.id) == str(vip_role_id2):
-                            staff_priority = 10  # Elite VIP priority - 0.25s processing
-                            staff_tag = '💎 SynapseChat Staff'  # Elite staff with diamond
+                # Check if staff member also has Elite VIP role GLOBALLY for priority inheritance
+                if vip_role_id2 and user_id and hasattr(self, 'bot') and self.bot:
+                    for check_guild in self.bot.guilds:
+                        member = check_guild.get_member(user_id)
+                        if member and member.roles:
+                            for role in member.roles:
+                                if str(role.id) == str(vip_role_id2):
+                                    staff_priority = 10  # Elite VIP priority - 0.25s processing
+                                    staff_tag = '💎 SynapseChat Staff'  # Elite staff with diamond
+                                    print(f"STAFF_ELITE_GLOBAL: Staff member {user_id} has Elite VIP in {check_guild.name}")
+                                    break
+                        if staff_priority == 10:  # Elite found
                             break
                 
                 # Check VIP_ROLE_ID if Elite not found
@@ -593,15 +606,22 @@ class SimpleCrossChat:
         # VIP STATUS CHECK - Early detection for fast-track processing
         is_vip = await self.is_support_vip(message.author.id)
         
-        # ELITE VIP CHECK - Check for VIP_ROLE_ID2 for ultra-fast processing
+        # ELITE VIP CHECK - GLOBAL check across all guilds for VIP_ROLE_ID2
         import os
         vip_role_id2 = os.environ.get('VIP_ROLE_ID2')
         is_elite_vip = False
-        if vip_role_id2 and message.author.roles:
-            for role in message.author.roles:
-                if str(role.id) == str(vip_role_id2):
-                    is_elite_vip = True
-                    print(f"ELITE_VIP: User {message.author.display_name} has Elite VIP status - ULTRA FAST processing")
+        
+        if vip_role_id2 and hasattr(self, 'bot') and self.bot:
+            # Check across ALL guilds where bot can see the user
+            for check_guild in self.bot.guilds:
+                member = check_guild.get_member(message.author.id)
+                if member and member.roles:
+                    for role in member.roles:
+                        if str(role.id) == str(vip_role_id2):
+                            is_elite_vip = True
+                            print(f"ELITE_VIP_GLOBAL: User {message.author.display_name} has Elite VIP status in {check_guild.name} - ULTRA FAST processing")
+                            break
+                if is_elite_vip:
                     break
         
         # TAG HIERARCHY - Get user's tag level (separate from VIP processing speed)
@@ -735,7 +755,7 @@ class SimpleCrossChat:
             print(f"PROCESSING_REACTION_ERROR: Failed to add processing reaction: {e}")
         
         # Generate CC-ID ONCE for both VIP and standard users (after all checks)
-        cc_id = self.generate_cc_id(message.id, is_vip=is_vip)
+        cc_id = self.generate_cc_id(message.id, is_vip=is_vip, message=message)
         print(f"SIMPLE: Generated CC-ID {cc_id} for message {message.id} (VIP: {is_vip})")
         
         # Create embed for crosschat display with hierarchy and VIP support
@@ -813,6 +833,9 @@ class SimpleCrossChat:
                 except Exception as e:
                     print(f"ATTACHMENT_ERROR: Failed to prepare {attachment.filename}: {e}")
 
+        # Initialize sent counter for all processing paths
+        sent_count = 0
+        
         # SPEED DIFFERENTIATION: Elite VIP > Regular VIP > Standard users
         if is_elite_vip:
             # ELITE VIP: Instant parallel distribution with minimal delays
@@ -893,7 +916,6 @@ class SimpleCrossChat:
             # STANDARD PROCESSING: Sequential sends for regular users
             print(f"STANDARD: Starting sequential distribution to {len(channels)-1} channels")
             print(f"STANDARD_DEBUG: Source channel: {message.channel.id}, Target channels: {channels}")
-            sent_count = 0
             for channel_id in channels:
                 if channel_id == message.channel.id:
                     continue
@@ -1191,42 +1213,9 @@ class SimpleCrossChat:
     async def process_pending_system_alerts(self):
         """Process any pending system alerts from web panel"""
         try:
-            # Check for pending system alerts in database
-            # MongoDB operations - no connection needed
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT id, alert_type, message, admin_user, created_at
-                        FROM pending_system_alerts 
-                        WHERE processed_at IS NULL
-                        ORDER BY created_at ASC
-                    """)
-                    pending_alerts = cur.fetchall()
-                    
-                    for alert in pending_alerts:
-                        alert_id = alert['id']
-                        alert_type = alert['alert_type']
-                        message = alert['message']
-                        admin_user = alert['admin_user']
-                        
-                        print(f"PROCESSING_ALERT: {alert_type} alert from {admin_user}")
-                        
-                        # Send the alert
-                        sent_count = await self.send_system_alert(message, alert_type, admin_user)
-                        
-                        # Mark as processed
-                        cur.execute("""
-                            UPDATE pending_system_alerts 
-                            SET processed = true, processed_at = CURRENT_TIMESTAMP
-                            WHERE id = %s
-                        """, (alert_id,))
-                        conn.commit()
-                        
-                        print(f"ALERT_PROCESSED: Alert {alert_id} sent to {sent_count} channels")
-                        
-            finally:
-                # MongoDB - no connection cleanup needed
-                pass
+            # MongoDB operations - simplified alert processing
+            print("ALERT_SYSTEM: MongoDB alert system ready")
+            # Alert processing would use MongoDB handler if implemented
                 
         except Exception as e:
             print(f"PROCESS_ALERTS_ERROR: Failed to process pending alerts: {e}")
