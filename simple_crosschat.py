@@ -556,7 +556,7 @@ class SimpleCrossChat:
             print(f"❌ CRITICAL: Current channel {message.channel.id} not in channels list {channels}")
             return None
         
-        # MongoDB duplicate check - CRITICAL for preventing duplicates
+        # IMMEDIATE DUPLICATE PREVENTION - Log processing start to prevent race conditions
         print(f"🔍 DUPLICATE_CHECK: Checking if message {message_id} already processed")
         existing = None
         if hasattr(self.bot, 'db_handler') and self.bot.db_handler:
@@ -568,7 +568,25 @@ class SimpleCrossChat:
             print(f"🛡️ DUPLICATE_SKIP: Message {message_id} already processed in database, skipping")
             return 'processed'
         else:
-            print(f"✅ DUPLICATE_CHECK: Message {message_id} is new, proceeding with processing")
+            # IMMEDIATELY mark as processing to prevent duplicates
+            print(f"✅ DUPLICATE_CHECK: Message {message_id} is new, marking as processing")
+            if hasattr(self.bot, 'db_handler') and self.bot.db_handler:
+                try:
+                    # Create immediate processing marker
+                    processing_marker = {
+                        'message_id': message_id,
+                        'status': 'processing',
+                        'user_id': str(message.author.id),
+                        'channel_id': str(message.channel.id),
+                        'guild_id': str(message.guild.id),
+                        'timestamp': message.created_at.isoformat(),
+                        'processing_started': True
+                    }
+                    self.bot.db_handler.log_crosschat_message(processing_marker)
+                    print(f"🔒 PROCESSING_LOCK: Marked message {message_id} as processing")
+                except Exception as e:
+                    print(f"⚠️ PROCESSING_LOCK_FAILED: Could not mark processing: {e}")
+            print(f"✅ DUPLICATE_CHECK: Message {message_id} ready for processing")
         
         # VIP STATUS CHECK - Early detection for fast-track processing
         is_vip = await self.is_support_vip(message.author.id)
