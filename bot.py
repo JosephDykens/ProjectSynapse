@@ -269,13 +269,9 @@ class CrossChatBot(commands.Bot):
                 await interaction.response.defer()
                 
                 if hasattr(self, 'cross_chat_manager') and self.cross_chat_manager:
-                    result = await self.cross_chat_manager.send_announcement(
-                        message=message,
-                        sender=interaction.user,
-                        anonymous=anonymous
-                    )
+                    result = await self.cross_chat_manager.send_announcement(message)
                     
-                    channels_sent = result.get('channels_sent', 0)
+                    channels_sent = result if isinstance(result, int) else 0
                     embed = discord.Embed(
                         title="📢 Announcement Sent",
                         description=f"Announcement delivered to {channels_sent} cross-chat channels",
