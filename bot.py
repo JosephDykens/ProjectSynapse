@@ -1063,11 +1063,6 @@ class CrossChatBot(commands.Bot):
         # Start revolving status updater
         asyncio.create_task(self.cycling_status_updater())
         print("Started revolving status updater")
-                
-        except Exception as e:
-            print(f"CRITICAL: Command sync failed: {e}")
-            import traceback
-            traceback.print_exc()
         
         print("BOT READY - All systems operational")
     
