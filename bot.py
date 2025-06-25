@@ -7,7 +7,7 @@ os.environ['DEPLOYMENT_MODE'] = 'true'
 import asyncio
 import discord
 from discord.ext import commands
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 import threading
 from flask import Flask
@@ -324,7 +324,7 @@ class CrossChatBot(commands.Bot):
             
             embed.add_field(
                 name="🛡️ Moderation Commands",
-                value="`/warn` - Warn a user\n`/ban` - Temporarily ban a user",
+                value="`/warn` - Warn a user\n`/ban` - Temporarily ban a user\n`/unban` - Remove ban from a user\n`/moderation` - Manage auto-moderation settings",
                 inline=False
             )
             
@@ -489,6 +489,67 @@ class CrossChatBot(commands.Bot):
                     print(f"⚠️ Failed to send ban DM to {user.name}: {dm_error}")
                     
                 print(f"MODERATION: {interaction.user} banned {user} for {duration}h: {reason}")
+            except Exception as e:
+                await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
+
+        @self.tree.command(name="unban", description="Remove ban from a user (Staff/Owner only)")
+        @discord.app_commands.describe(user="User to unban from crosschat")
+        async def unban(interaction: discord.Interaction, user: discord.Member):
+            has_permission = await self.is_bot_owner(interaction)
+            if not has_permission:
+                staff_role_id = os.environ.get('STAFF_ROLE_ID')
+                if staff_role_id:
+                    for guild in self.guilds:
+                        member = guild.get_member(interaction.user.id)
+                        if member and any(str(role.id) == str(staff_role_id) for role in member.roles):
+                            has_permission = True
+                            break
+            if not has_permission:
+                await interaction.response.send_message("❌ Insufficient permissions", ephemeral=True)
+                return
+            try:
+                await interaction.response.defer()
+                
+                # Remove ban from database
+                print(f"🔍 DEBUG: FORCE LOGGING unban for user {user.id}")
+                unban_logged = False
+                if self.db_handler:
+                    unban_logged = self.db_handler.unban_user(str(user.id))
+                    if unban_logged:
+                        print(f"✅ UNBAN LOGGED: User {user.id} unbanned in database")
+                    else:
+                        print(f"❌ UNBAN LOG FAILED: Could not unban user {user.id}")
+                else:
+                    print(f"❌ NO DB_HANDLER: Cannot log unban - database unavailable")
+                    unban_logged = False
+                
+                embed = discord.Embed(
+                    title="✅ User Unbanned from CrossChat",
+                    description=f"{user.mention} has been unbanned from the crosschat service",
+                    color=0x00ff00
+                )
+                embed.add_field(name="User", value=user.mention, inline=True)
+                embed.add_field(name="Moderator", value=interaction.user.mention, inline=True)
+                embed.add_field(name="Database Status", value="✅ Removed" if unban_logged else "❌ Failed", inline=True)
+                embed.set_footer(text="User can now participate in cross-server messages again")
+                await interaction.followup.send(embed=embed)
+                
+                # Send DM to unbanned user
+                try:
+                    dm_embed = discord.Embed(
+                        title="✅ Service Ban Removed",
+                        description="Your ban from SynapseChat crosschat service has been removed.",
+                        color=0x00ff00
+                    )
+                    dm_embed.add_field(name="Status", value="You can now participate in cross-server messages again", inline=False)
+                    dm_embed.set_footer(text="SynapseChat Moderation System")
+                    
+                    await user.send(embed=dm_embed)
+                    print(f"✅ Unban DM sent to {user.name} ({user.id})")
+                except Exception as dm_error:
+                    print(f"⚠️ Failed to send unban DM to {user.name}: {dm_error}")
+                    
+                print(f"MODERATION: {interaction.user} unbanned {user}")
             except Exception as e:
                 await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
@@ -966,31 +1027,42 @@ class CrossChatBot(commands.Bot):
         print(f"BOT ONLINE: {self.user}")
         print(f"Guilds: {len(self.guilds)}")
         
-        # Add all slash commands here to ensure proper registration (only once)
+        # Register slash commands once and sync with Discord
         if not self.commands_registered:
+            print("Registering all slash commands...")
             self.add_slash_commands()
             self.commands_registered = True
-            print("Slash commands registered")
+            
+            try:
+                # Sync commands with Discord
+                synced = await self.tree.sync()
+                print(f"SUCCESS: {len(synced)} commands synced with Discord:")
+                for cmd in synced:
+                    print(f"  ✓ /{cmd.name}")
+                
+                # Verify expected commands are present
+                expected_commands = ['ping', 'status', 'help', 'invite', 'serverinfo', 'announce', 'crosschat', 'setup', 'warn', 'ban', 'unban', 'moderation', 'eval']
+                synced_names = [cmd.name for cmd in synced]
+                
+                missing_commands = [cmd for cmd in expected_commands if cmd not in synced_names]
+                if missing_commands:
+                    print(f"WARNING: Missing commands: {missing_commands}")
+                else:
+                    print("✅ All expected commands successfully synced")
+                    
+            except Exception as e:
+                print(f"❌ CRITICAL: Failed to sync commands with Discord: {e}")
+                # Retry once
+                try:
+                    await asyncio.sleep(2)
+                    synced = await self.tree.sync()
+                    print(f"RETRY SUCCESS: {len(synced)} commands synced on retry")
+                except Exception as retry_error:
+                    print(f"❌ RETRY FAILED: {retry_error}")
         
         # Start revolving status updater
         asyncio.create_task(self.cycling_status_updater())
         print("Started revolving status updater")
-        
-        try:
-            # Clear existing commands first to ensure clean registration
-            self.tree.clear_commands(guild=None)  # Clear global commands
-            
-            # Re-register commands
-            self.add_slash_commands()
-            
-            # Sync with Discord
-            synced = await self.tree.sync()
-            print(f"SUCCESS: {len(synced)} commands synced with Discord:")
-            for cmd in synced:
-                print(f"  ✓ /{cmd.name}")
-                
-            if len(synced) < 10:  # Expected minimum commands
-                print("WARNING: Fewer commands synced than expected")
                 
         except Exception as e:
             print(f"CRITICAL: Command sync failed: {e}")
