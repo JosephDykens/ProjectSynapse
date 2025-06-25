@@ -1041,7 +1041,7 @@ class CrossChatBot(commands.Bot):
                     print(f"  ✓ /{cmd.name}")
                 
                 # Verify expected commands are present
-                expected_commands = ['ping', 'status', 'help', 'invite', 'serverinfo', 'announce', 'crosschat', 'setup', 'warn', 'ban', 'unban', 'moderation', 'eval']
+                expected_commands = ['ping', 'status', 'help', 'invite', 'serverinfo', 'announce', 'crosschat', 'setup', 'warn', 'ban', 'unban', 'moderation', 'eval', 'serverban', 'serverunban', 'serverbans', 'presence', 'shutdown', 'restart', 'guilds', 'stats']
                 synced_names = [cmd.name for cmd in synced]
                 
                 missing_commands = [cmd for cmd in expected_commands if cmd not in synced_names]
@@ -2145,6 +2145,111 @@ class CrossChatBot(commands.Bot):
                 
             except Exception as e:
                 await interaction.followup.send(f"❌ Error updating presence: {str(e)}", ephemeral=True)
+
+        @self.tree.command(name="shutdown", description="Safely shutdown the bot (Owner Only)")
+        async def shutdown(interaction: discord.Interaction):
+            """Safely shutdown the bot"""
+            if not await self.is_bot_owner(interaction):
+                await interaction.response.send_message("❌ Only the bot owner can use this command.", ephemeral=True)
+                return
+            
+            await interaction.response.send_message("🔄 Bot is shutting down safely...", ephemeral=True)
+            print("Bot shutdown initiated by owner")
+            await self.close()
+
+        @self.tree.command(name="restart", description="Restart the bot (Owner Only)")
+        async def restart(interaction: discord.Interaction):
+            """Restart the bot"""
+            if not await self.is_bot_owner(interaction):
+                await interaction.response.send_message("❌ Only the bot owner can use this command.", ephemeral=True)
+                return
+            
+            await interaction.response.send_message("🔄 Bot is restarting...", ephemeral=True)
+            print("Bot restart initiated by owner")
+            await self.close()
+
+        @self.tree.command(name="guilds", description="List all servers the bot is in (Owner Only)")
+        async def guilds(interaction: discord.Interaction):
+            """List all guilds the bot is connected to"""
+            if not await self.is_bot_owner(interaction):
+                await interaction.response.send_message("❌ Only the bot owner can use this command.", ephemeral=True)
+                return
+            
+            await interaction.response.defer(ephemeral=True)
+            
+            try:
+                embed = discord.Embed(
+                    title="🏰 Server List",
+                    description=f"Bot is connected to {len(self.guilds)} servers",
+                    color=0x0099ff
+                )
+                
+                guild_list = []
+                for i, guild in enumerate(self.guilds[:25], 1):
+                    guild_list.append(f"{i}. **{guild.name}** (ID: {guild.id}) - {guild.member_count} members")
+                
+                if guild_list:
+                    embed.add_field(
+                        name="Connected Servers",
+                        value="\n".join(guild_list),
+                        inline=False
+                    )
+                
+                if len(self.guilds) > 25:
+                    embed.set_footer(text=f"Showing 25 of {len(self.guilds)} servers")
+                else:
+                    embed.set_footer(text="SynapseChat Server Manager")
+                
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                
+            except Exception as e:
+                await interaction.followup.send(f"❌ Error listing servers: {str(e)}", ephemeral=True)
+
+        @self.tree.command(name="stats", description="Show detailed bot statistics (Owner Only)")
+        async def stats(interaction: discord.Interaction):
+            """Show detailed bot statistics"""
+            if not await self.is_bot_owner(interaction):
+                await interaction.response.send_message("❌ Only the bot owner can use this command.", ephemeral=True)
+                return
+            
+            await interaction.response.defer(ephemeral=True)
+            
+            try:
+                import sys
+                import datetime
+                
+                # Calculate uptime
+                uptime_seconds = time.time() - self.start_time
+                uptime_str = str(datetime.timedelta(seconds=int(uptime_seconds)))
+                
+                # Get database stats
+                message_count = 0
+                channel_count = 0
+                if hasattr(self, 'db_handler') and self.db_handler:
+                    try:
+                        channels = self.db_handler.get_crosschat_channels()
+                        channel_count = len(channels) if channels else 0
+                    except Exception as e:
+                        print(f"Error getting database stats: {e}")
+                
+                embed = discord.Embed(
+                    title="📊 Bot Statistics",
+                    color=0x0099ff
+                )
+                
+                embed.add_field(name="🕐 Uptime", value=uptime_str, inline=True)
+                embed.add_field(name="🏰 Servers", value=f"{len(self.guilds)}", inline=True)
+                embed.add_field(name="👥 Total Users", value=f"{sum(guild.member_count for guild in self.guilds)}", inline=True)
+                embed.add_field(name="🌐 Latency", value=f"{round(self.latency * 1000)}ms", inline=True)
+                embed.add_field(name="🔗 Crosschat Channels", value=f"{channel_count}", inline=True)
+                embed.add_field(name="🐍 Python Version", value=f"{sys.version.split()[0]}", inline=True)
+                
+                embed.set_footer(text="SynapseChat Statistics")
+                
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                
+            except Exception as e:
+                await interaction.followup.send(f"❌ Error getting statistics: {str(e)}", ephemeral=True)
 
 
 
