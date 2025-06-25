@@ -1034,31 +1034,51 @@ class CrossChatBot(commands.Bot):
             self.commands_registered = True
             
             try:
-                # Sync commands with Discord
+                # Clear existing commands first (force refresh)
+                self.tree.clear_commands(guild=None)
+                print("Cleared existing commands from Discord")
+                
+                # Re-add all commands
+                self.add_slash_commands()
+                print("Re-added all commands to command tree")
+                
+                # Force sync with Discord
                 synced = await self.tree.sync()
                 print(f"SUCCESS: {len(synced)} commands synced with Discord:")
                 for cmd in synced:
                     print(f"  ✓ /{cmd.name}")
                 
                 # Verify expected commands are present
-                expected_commands = ['ping', 'status', 'help', 'invite', 'serverinfo', 'announce', 'crosschat', 'setup', 'warn', 'ban', 'unban', 'moderation', 'eval', 'serverban', 'serverunban', 'serverbans', 'presence', 'shutdown', 'restart', 'guilds', 'stats']
+                expected_commands = ['ping', 'status', 'help', 'invite', 'serverinfo', 'announce', 'crosschat', 'setup', 'warn', 'ban', 'unban', 'moderation', 'eval', 'serverban', 'serverunban', 'serverbans', 'presence', 'shutdown', 'restart', 'guilds', 'stats', 'sync']
                 synced_names = [cmd.name for cmd in synced]
                 
                 missing_commands = [cmd for cmd in expected_commands if cmd not in synced_names]
                 if missing_commands:
-                    print(f"WARNING: Missing commands: {missing_commands}")
+                    print(f"⚠️  WARNING: Missing commands: {missing_commands}")
+                    print("Attempting force re-sync...")
+                    # Try guild-specific sync if global fails
+                    try:
+                        for guild in self.guilds:
+                            guild_synced = await self.tree.sync(guild=guild)
+                            print(f"Guild {guild.name}: {len(guild_synced)} commands synced")
+                    except Exception as guild_error:
+                        print(f"Guild sync failed: {guild_error}")
                 else:
                     print("✅ All expected commands successfully synced")
                     
             except Exception as e:
                 print(f"❌ CRITICAL: Failed to sync commands with Discord: {e}")
-                # Retry once
+                # Retry with different approach
                 try:
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(3)
+                    # Try clearing and re-syncing
+                    self.tree.clear_commands(guild=None)
+                    await asyncio.sleep(1)
                     synced = await self.tree.sync()
                     print(f"RETRY SUCCESS: {len(synced)} commands synced on retry")
                 except Exception as retry_error:
                     print(f"❌ RETRY FAILED: {retry_error}")
+                    print("Commands may take up to 1 hour to appear in Discord due to caching")
         
         # Start revolving status updater
         asyncio.create_task(self.cycling_status_updater())
@@ -2030,10 +2050,16 @@ class CrossChatBot(commands.Bot):
                 await interaction.response.send_message("❌ Only the bot owner can use this command.", ephemeral=True)
                 return
             
+            await interaction.response.defer(ephemeral=True)
+            
             try:
-                pass  # MongoDB conversion - no operations needed
+                # Execute the code safely
+                result = eval(code)
+                output = str(result)[:1900]  # Limit output length
+                await interaction.followup.send(f"```python\n{code}\n```\n**Result:**\n```\n{output}\n```", ephemeral=True)
             except Exception as e:
-                pass
+                await interaction.followup.send(f"```python\n{code}\n```\n**Error:**\n```\n{str(e)}\n```", ephemeral=True)
+
         @self.tree.command(name="moderation", description="Manage auto-moderation settings")
         @discord.app_commands.describe(
             action="Action to perform",
@@ -2250,6 +2276,51 @@ class CrossChatBot(commands.Bot):
                 
             except Exception as e:
                 await interaction.followup.send(f"❌ Error getting statistics: {str(e)}", ephemeral=True)
+
+        @self.tree.command(name="sync", description="Force sync all commands with Discord (Owner Only)")
+        async def sync_commands(interaction: discord.Interaction):
+            """Force sync all slash commands with Discord"""
+            if not await self.is_bot_owner(interaction):
+                await interaction.response.send_message("❌ Only the bot owner can use this command.", ephemeral=True)
+                return
+            
+            await interaction.response.defer(ephemeral=True)
+            
+            try:
+                # Clear and re-sync all commands
+                self.tree.clear_commands(guild=None)
+                await asyncio.sleep(1)
+                
+                # Re-add all commands
+                self.add_slash_commands()
+                
+                # Force sync with Discord
+                synced = await self.tree.sync()
+                
+                embed = discord.Embed(
+                    title="🔄 Command Sync Complete",
+                    description=f"Successfully synced {len(synced)} commands with Discord",
+                    color=0x00ff00
+                )
+                
+                command_list = [f"/{cmd.name}" for cmd in synced]
+                if command_list:
+                    # Split into chunks if too many commands
+                    chunk_size = 20
+                    for i in range(0, len(command_list), chunk_size):
+                        chunk = command_list[i:i+chunk_size]
+                        embed.add_field(
+                            name=f"Commands {i+1}-{min(i+chunk_size, len(command_list))}",
+                            value=", ".join(chunk),
+                            inline=False
+                        )
+                
+                embed.set_footer(text="Commands may take up to 1 hour to appear globally due to Discord caching")
+                
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                
+            except Exception as e:
+                await interaction.followup.send(f"❌ Error syncing commands: {str(e)}", ephemeral=True)
 
 
 
