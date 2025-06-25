@@ -425,42 +425,6 @@ class SimpleCrossChat:
                 'priority': int (processing priority)
             }
         """
-        # Check if this is the bot owner from environment variable
-        import os
-        bot_owner_id = os.environ.get('BOT_OWNER_ID')
-        
-        # Override for bot owner - but check for VIP icons first
-        if user_id and bot_owner_id and str(user_id) == str(bot_owner_id):
-            founder_tag = 'SynapseChat Founder'  # Default founder tag
-            
-            # Check if founder also has Elite role for diamond icon
-            vip_role_id2 = os.environ.get('VIP_ROLE_ID2')
-            if vip_role_id2 and user_roles:
-                for role in user_roles:
-                    if str(role.id) == str(vip_role_id2):
-                        founder_tag = '💎 SynapseChat Founder'  # Elite founder with diamond
-                        break
-            
-            # If not Elite, check if founder has Architect VIP for star icon (VIP_ROLE_ID only, not VIP_ROLE_ID2)
-            if founder_tag == 'SynapseChat Founder':
-                # Check specifically for VIP_ROLE_ID (Architect tier) in support server
-                vip_role_id = os.environ.get('VIP_ROLE_ID')
-                synapsechat_guild_id = os.environ.get('SYNAPSECHAT_GUILD_ID')
-                if vip_role_id and synapsechat_guild_id and hasattr(self, 'bot'):
-                    support_guild = self.bot.get_guild(int(synapsechat_guild_id))
-                    if support_guild:
-                        member = support_guild.get_member(user_id)
-                        if member:
-                            vip_role = support_guild.get_role(int(vip_role_id))
-                            if vip_role and vip_role in member.roles:
-                                founder_tag = '⭐ SynapseChat Founder'  # Architect founder with star
-            
-            return {
-                'level': 7,
-                'tag': founder_tag,
-                'color': 0xDC143C,  # Crimson red
-                'priority': 10
-            }
         
         # Default level for regular users (no tag)
         tag_info = {
@@ -470,89 +434,92 @@ class SimpleCrossChat:
             'priority': 100
         }
         
-        # Check for VIP_ROLE_ID2 (Elite tier) FIRST - GLOBAL check across all guilds
-        vip_role_id2 = os.environ.get('VIP_ROLE_ID2')
-        if vip_role_id2 and user_id and hasattr(self, 'bot') and self.bot:
-            # Global Elite VIP check across ALL guilds where bot can see the user
+        # Global VIP detection helper function
+        import os
+        def check_role_globally(role_id):
+            """Check if user has role across ALL guilds"""
+            if not (role_id and user_id and hasattr(self, 'bot') and self.bot):
+                return False
             for check_guild in self.bot.guilds:
                 member = check_guild.get_member(user_id)
                 if member and member.roles:
                     for role in member.roles:
-                        if str(role.id) == str(vip_role_id2):
-                            tag_info = {
-                                'level': 5,
-                                'tag': '💎 SynapseChat Elite',
-                                'color': 0xff8c00,  # Orange
-                                'priority': 10  # FASTEST processing - Elite gets 0.25s vs Architect 0.5s
-                            }
-                            print(f"ELITE_VIP_TAG_GLOBAL: User {user_id} has Elite VIP role in {check_guild.name}")
-                            break
-                if tag_info['level'] == 5:  # Elite found
-                    break
+                        if str(role.id) == str(role_id):
+                            return True
+            return False
         
-        # Check if user is VIP (Architect tier) - only if not already Elite
-        # VIP tag is based on subscription status, not role hierarchy
-        elif is_vip:
-            tag_info = {
+        # Check global VIP status BEFORE using in Founder/Staff checks
+        vip_role_id2 = os.environ.get('VIP_ROLE_ID2')  # Elite
+        vip_role_id = os.environ.get('VIP_ROLE_ID')    # Architect
+        
+        has_elite_vip = check_role_globally(vip_role_id2)
+        has_architect_vip = check_role_globally(vip_role_id) if not has_elite_vip else False
+        has_staff_role = check_role_globally(os.environ.get('STAFF_ROLE_ID'))
+        
+        # PRIORITY 1: Check if this is the bot owner/founder FIRST
+        bot_owner_id = os.environ.get('BOT_OWNER_ID')
+        if user_id and bot_owner_id and str(user_id) == str(bot_owner_id):
+            founder_tag = 'SynapseChat Founder'  # Default founder tag
+            
+            # Apply global VIP icons to founder tag
+            if has_elite_vip:
+                founder_tag = '💎 SynapseChat Founder'  # Elite founder with diamond
+                print(f"FOUNDER_ELITE_GLOBAL: Founder has Elite VIP globally")
+            elif has_architect_vip:
+                founder_tag = '⭐ SynapseChat Founder'  # Architect founder with star
+                print(f"FOUNDER_ARCHITECT_GLOBAL: Founder has Architect VIP globally")
+            
+            return {
+                'level': 7,
+                'tag': founder_tag,
+                'color': 0xDC143C,  # Crimson red
+                'priority': 10
+            }
+        
+        # PRIORITY 2: Check for Staff role SECOND
+        if has_staff_role:
+            staff_tag = 'SynapseChat Staff'  # Default staff tag
+            staff_priority = 100  # Same as regular users (1.0s processing)
+            
+            # Apply global VIP icons and processing speeds to staff tag
+            if has_elite_vip:
+                staff_tag = '💎 SynapseChat Staff'  # Elite staff with diamond
+                staff_priority = 10  # Elite VIP priority - 0.25s processing
+                print(f"STAFF_ELITE_GLOBAL: Staff has Elite VIP globally")
+            elif has_architect_vip:
+                staff_tag = '⭐ SynapseChat Staff'  # Architect staff with star
+                staff_priority = 25  # Architect VIP priority - 0.5s processing
+                print(f"STAFF_ARCHITECT_GLOBAL: Staff has Architect VIP globally")
+            
+            return {
+                'level': 6,
+                'tag': staff_tag,
+                'color': 0x9932cc,  # Purple
+                'priority': staff_priority
+            }
+        
+        # PRIORITY 3: VIP-only users (no Staff or Founder roles)
+        if has_elite_vip:
+            return {
+                'level': 5,
+                'tag': '💎 SynapseChat Elite',
+                'color': 0xff8c00,  # Orange
+                'priority': 10  # Elite processing speed
+            }
+        elif has_architect_vip:
+            return {
+                'level': 3,
+                'tag': '⭐ SynapseChat Architect',
+                'color': 0xffd700,  # Gold
+                'priority': 25  # Architect processing speed
+            }
+        elif is_vip:  # Fallback for subscription-based VIP
+            return {
                 'level': 3,
                 'tag': 'SynapseChat Architect',
                 'color': 0xffd700,  # Gold
-                'priority': 25  # Architect VIP priority - 0.5s processing
+                'priority': 25
             }
-        
-        # Check for Official Staff role from environment variable (GLOBAL CHECK across all guilds)
-        # BUT only if user is NOT already identified as Founder (Level 7)
-        staff_role_id = os.environ.get('STAFF_ROLE_ID')
-        if staff_role_id and user_id and tag_info['level'] < 7:  # Don't override Founder
-            # Global staff role check across all guilds where bot can see the user
-            is_staff = False
-            staff_guild_name = ""
-            
-            # Check across all guilds where bot can see the user
-            if hasattr(self, 'bot') and self.bot:
-                for check_guild in self.bot.guilds:
-                    member = check_guild.get_member(user_id)
-                    if member and member.roles:
-                        for role in member.roles:
-                            if str(role.id) == str(staff_role_id):
-                                is_staff = True
-                                staff_guild_name = check_guild.name
-                                print(f"STAFF_GLOBAL: User {user_id} has SynapseChat Staff role in {check_guild.name}")
-                                break
-                    if is_staff:
-                        break
-            
-            if is_staff:
-                # Staff always shows staff tag but inherits VIP priority and icons if they have VIP roles
-                staff_priority = 55  # Default staff priority
-                staff_tag = 'SynapseChat Staff'  # Default staff tag
-                
-                # Check if staff member also has Elite VIP role GLOBALLY for priority inheritance
-                if vip_role_id2 and user_id and hasattr(self, 'bot') and self.bot:
-                    for check_guild in self.bot.guilds:
-                        member = check_guild.get_member(user_id)
-                        if member and member.roles:
-                            for role in member.roles:
-                                if str(role.id) == str(vip_role_id2):
-                                    staff_priority = 10  # Elite VIP priority - 0.25s processing
-                                    staff_tag = '💎 SynapseChat Staff'  # Elite staff with diamond
-                                    print(f"STAFF_ELITE_GLOBAL: Staff member {user_id} has Elite VIP in {check_guild.name}")
-                                    break
-                        if staff_priority == 10:  # Elite found
-                            break
-                
-                # Check VIP_ROLE_ID if Elite not found
-                if staff_priority == 55 and is_vip:
-                    staff_priority = 25  # Architect VIP priority - 0.5s processing
-                    staff_tag = '⭐ SynapseChat Staff'  # Architect staff with star
-                
-                tag_info = {
-                    'level': 6,
-                    'tag': staff_tag,
-                    'color': 0x9932cc,  # Purple
-                    'priority': staff_priority
-                }
-                print(f"STAFF_TAG: Applied {staff_tag} tag for user {user_id} (found in {staff_guild_name})")
         
         return tag_info
 
@@ -625,7 +592,8 @@ class SimpleCrossChat:
                     break
         
         # TAG HIERARCHY - Get user's tag level (separate from VIP processing speed)
-        tag_info = self.get_tag_hierarchy_level(message.author.roles, message.guild, message.author.id, is_vip)
+        # Pass None for roles to force global checking across all guilds
+        tag_info = self.get_tag_hierarchy_level(None, message.guild, message.author.id, is_vip)
         
         # Use tag hierarchy color (VIP users get their VIP tag color)
         final_color = tag_info['color']
