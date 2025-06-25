@@ -576,13 +576,19 @@ class SimpleCrossChat:
             print(f"❌ CRITICAL: Current channel {message.channel.id} not in channels list {channels}")
             return None
         
-        # MongoDB check - use bot's database handler
+        # MongoDB duplicate check - CRITICAL for preventing duplicates
+        print(f"🔍 DUPLICATE_CHECK: Checking if message {message_id} already processed")
         existing = None
         if hasattr(self.bot, 'db_handler') and self.bot.db_handler:
             existing = self.bot.db_handler.get_crosschat_message(message_id)
+        else:
+            print(f"❌ CRITICAL: No database handler available for duplicate checking")
+            
         if existing:
-            print(f"DUPLICATE_SKIP: Message {message_id} already processed in database, skipping")
+            print(f"🛡️ DUPLICATE_SKIP: Message {message_id} already processed in database, skipping")
             return 'processed'
+        else:
+            print(f"✅ DUPLICATE_CHECK: Message {message_id} is new, proceeding with processing")
         
         # VIP STATUS CHECK - Early detection for fast-track processing
         is_vip = await self.is_support_vip(message.author.id)
