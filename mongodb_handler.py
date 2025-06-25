@@ -143,12 +143,17 @@ class MongoDBHandler:
             return False
 
     def get_crosschat_message(self, message_id: str) -> Optional[Dict[str, Any]]:
-        """Get crosschat message by ID"""
+        """Get crosschat message by ID with debug logging"""
         try:
             if not self._ensure_connected():
+                print(f"❌ DUPLICATE_CHECK: No database connection for message {message_id}")
                 return None
             
             message = self.db.crosschat_messages.find_one({"message_id": message_id})
+            if message:
+                print(f"✅ DUPLICATE_FOUND: Message {message_id} already exists in database")
+            else:
+                print(f"🔍 DUPLICATE_CHECK: Message {message_id} not found - proceeding with processing")
             return message
         except Exception as e:
             print(f"❌ Error getting crosschat message: {e}")
