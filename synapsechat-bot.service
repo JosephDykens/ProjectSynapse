@@ -1,0 +1,17 @@
+[Unit]
+Description=SynapseChat Discord Bot
+After=network.target
+
+[Service]
+Type=simple
+User=synapsechat
+WorkingDirectory=/opt/synapsechat-bot
+Environment=DISCORD_TOKEN=your_discord_token_here
+Environment=DATABASE_URL=your_database_url_here
+Environment=BOT_OWNER_ID=your_discord_user_id
+ExecStart=/usr/bin/python3 /opt/synapsechat-bot/bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
