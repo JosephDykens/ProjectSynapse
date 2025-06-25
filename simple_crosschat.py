@@ -479,7 +479,7 @@ class SimpleCrossChat:
                         'level': 5,
                         'tag': '💎 SynapseChat Elite',
                         'color': 0xff8c00,  # Orange
-                        'priority': 10  # FASTEST processing - Elite gets priority 10 vs Architect 50
+                        'priority': 10  # FASTEST processing - Elite gets 0.25s vs Architect 0.5s
                     }
                     break
         
@@ -490,7 +490,7 @@ class SimpleCrossChat:
                 'level': 3,
                 'tag': 'SynapseChat Architect',
                 'color': 0xffd700,  # Gold
-                'priority': 25  # Architect VIP priority - FAST
+                'priority': 25  # Architect VIP priority - 0.5s processing
             }
         
         # Check for Official Staff role from environment variable (GLOBAL CHECK across all guilds)
@@ -524,13 +524,13 @@ class SimpleCrossChat:
                 if vip_role_id2 and user_roles:
                     for vip_role in user_roles:
                         if str(vip_role.id) == str(vip_role_id2):
-                            staff_priority = 10  # Elite VIP priority - FASTEST
+                            staff_priority = 10  # Elite VIP priority - 0.25s processing
                             staff_tag = '💎 SynapseChat Staff'  # Elite staff with diamond
                             break
                 
                 # Check VIP_ROLE_ID if Elite not found
                 if staff_priority == 55 and is_vip:
-                    staff_priority = 25  # Architect VIP priority - FAST
+                    staff_priority = 25  # Architect VIP priority - 0.5s processing
                     staff_tag = '⭐ SynapseChat Staff'  # Architect staff with star
                 
                 tag_info = {
@@ -611,15 +611,25 @@ class SimpleCrossChat:
         final_color = tag_info['color']
         
         if is_elite_vip:
-            # ELITE VIP ULTRA-FAST: Minimal checks for maximum speed
+            # ELITE VIP: Full security checks with ultra-fast processing
             print(f"ELITE_VIP_EXPRESS: Processing Elite VIP {tag_info['tag']} message {message.id} from {message.author.display_name}")
             
-            # MINIMAL security checks for Elite VIP - only essential bans
+            # REQUIRED: Ban checks for Elite VIP users
             if await self.is_user_banned(message.author.id):
                 print(f"ELITE_VIP_BLOCKED: Elite VIP user {message.author.id} is banned")
                 return 'banned'
             
-            # Skip most other checks for Elite VIP speed
+            if await self.is_server_banned(message.guild.id):
+                print(f"ELITE_VIP_BLOCKED: Elite VIP user's server {message.guild.id} is banned")
+                return 'server_banned'
+            
+            # REQUIRED: AutoMod check for Elite VIP users
+            automod_reason = await self.check_automod(message)
+            if automod_reason:
+                print(f"ELITE_VIP_AUTOMOD: Elite VIP message blocked by AutoMod: {automod_reason}")
+                await self.send_automod_warning(message.author, automod_reason, message.content)
+                return 'blocked'
+            
             print(f"ELITE_VIP_EXPRESS: Elite VIP security checks passed for message {message.id}")
             
         elif is_vip:
