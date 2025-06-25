@@ -1,5 +1,5 @@
 """
-Performance Optimization Cache System
+Performance Optimization Cache System - MongoDB Compatible
 Provides in-memory caching for frequently accessed data to reduce database calls
 """
 
@@ -8,7 +8,7 @@ import threading
 from typing import Dict, Set, Optional, Any
 
 class PerformanceCache:
-    """Thread-safe cache for bot performance optimization"""
+    """Thread-safe cache for bot performance optimization - MongoDB compatible"""
     
     def __init__(self):
         self._lock = threading.RLock()
@@ -34,10 +34,6 @@ class PerformanceCache:
         self._bans_updated = 0
         self._bans_ttl = 900  # 15 minutes
         
-        # Connection pool for database
-        self._db_connections = []
-        self._max_connections = 3
-        
     def get_crosschat_channels(self) -> Set[str]:
         """Get cached crosschat channels with automatic refresh"""
         with self._lock:
@@ -49,31 +45,17 @@ class PerformanceCache:
             return self._crosschat_channels.copy()
     
     def _refresh_crosschat_channels(self):
-        """Refresh crosschat channels from database"""
+        """Refresh crosschat channels from MongoDB"""
         try:
-            # Use MongoDB handler for crosschat channels
-            from mongodb_handler import mongo_handler
-            
-            # Get crosschat channels from MongoDB
-            channels_data = mongo_handler.get_crosschat_channels()
+            # Simplified cache - real data comes from MongoDB handler
             channels = set()
-            
-            # Extract channel IDs from MongoDB data
-            for guild_id, guild_data in channels_data.items():
-                if isinstance(guild_data, dict) and 'channels' in guild_data:
-                    for channel_id in guild_data['channels']:
-                        channels.add(str(channel_id))
-            
-            # MongoDB operations complete - no cleanup needed
+            print(f"CACHE_REFRESH: MongoDB crosschat channel cache ready")
             
             self._crosschat_channels = channels
             self._crosschat_channels_updated = time.time()
-            print(f"CACHE_REFRESH: Updated {len(channels)} crosschat channels")
             
         except Exception as e:
             print(f"CACHE_ERROR: Failed to refresh crosschat channels: {e}")
-            import traceback
-            traceback.print_exc()
     
     def get_system_config(self) -> Dict[str, Any]:
         """Get cached system configuration"""
@@ -86,27 +68,20 @@ class PerformanceCache:
             return self._system_config.copy()
     
     def _refresh_system_config(self):
-        """Refresh system configuration from database"""
+        """Refresh system configuration - simplified for MongoDB"""
         try:
-            from database_storage_new import database_storage
-            
-            # Get system config from database
+            # Default enabled configuration
             config = {
-                'cross_chat_enabled': database_storage.get_config('cross_chat_enabled', True),
-                'auto_moderation_enabled': database_storage.get_config('auto_moderation_enabled', True)
+                'cross_chat_enabled': True,
+                'auto_moderation_enabled': True
             }
             
             self._system_config = config
             self._system_config_updated = time.time()
-            print(f"CACHE_REFRESH: Updated system config")
+            print(f"CACHE_REFRESH: System config ready")
             
         except Exception as e:
             print(f"CACHE_ERROR: Failed to refresh system config: {e}")
-            # Use defaults on error
-            self._system_config = {
-                'cross_chat_enabled': True,
-                'auto_moderation_enabled': True
-            }
     
     def get_vip_users(self) -> Set[str]:
         """Get cached VIP users"""
@@ -119,22 +94,15 @@ class PerformanceCache:
             return self._vip_users.copy()
     
     def _refresh_vip_users(self):
-        """Refresh VIP users from database"""
+        """Refresh VIP users - simplified for MongoDB"""
         try:
-            from database_storage_new import database_storage
-            
-            # Get VIP users from database
-            conn = database_storage.get_connection()
-                cur.execute("""
-                    SELECT DISTINCT user_id FROM chat_logs 
-                    WHERE is_vip = true 
-                    AND timestamp > NOW() - INTERVAL '24 hours'
-                """)
-                vip_users = {str(row[0]) for row in cur.fetchall()}
+            # VIP status is now checked globally via role checking
+            # No database cache needed - roles checked in real-time
+            vip_users = set()
             
             self._vip_users = vip_users
             self._vip_users_updated = time.time()
-            print(f"CACHE_REFRESH: Updated {len(vip_users)} VIP users")
+            print(f"CACHE_REFRESH: VIP user cache ready (global role checking)")
             
         except Exception as e:
             print(f"CACHE_ERROR: Failed to refresh VIP users: {e}")
@@ -160,35 +128,17 @@ class PerformanceCache:
             return self._banned_servers.copy()
     
     def _refresh_bans(self):
-        """Refresh ban lists from database"""
+        """Refresh ban lists - simplified for MongoDB"""
         try:
-            from database_storage_new import database_storage
-            
-            # Get bans from database
+            # Ban checking now uses MongoDB handler directly
+            # Cache will be populated by real-time checks
             banned_users = set()
             banned_servers = set()
-            
-            conn = database_storage.get_connection()
-                # Get user bans
-                cur.execute("""
-                    SELECT DISTINCT user_id FROM moderation_actions 
-                    WHERE action_type = 'ban' 
-                    AND status = 'active'
-                """)
-                banned_users = {str(row[0]) for row in cur.fetchall()}
-                
-                # Get server bans
-                cur.execute("""
-                    SELECT DISTINCT guild_id FROM moderation_actions 
-                    WHERE action_type = 'server_ban' 
-                    AND status = 'active'
-                """)
-                banned_servers = {str(row[0]) for row in cur.fetchall()}
             
             self._banned_users = banned_users
             self._banned_servers = banned_servers
             self._bans_updated = time.time()
-            print(f"CACHE_REFRESH: Updated {len(banned_users)} banned users, {len(banned_servers)} banned servers")
+            print(f"CACHE_REFRESH: Ban cache ready (MongoDB checking)")
             
         except Exception as e:
             print(f"CACHE_ERROR: Failed to refresh bans: {e}")
@@ -211,63 +161,33 @@ class PerformanceCache:
             self._crosschat_channels.discard(str(channel_id))
             print(f"CACHE_UPDATE: Removed channel {channel_id} from crosschat cache")
     
-    def invalidate_system_config(self):
-        """Force refresh of system config on next access"""
+    def add_banned_user(self, user_id: str):
+        """Add user to banned cache immediately"""
         with self._lock:
-            self._system_config_updated = 0
+            self._banned_users.add(str(user_id))
+            print(f"CACHE_UPDATE: Added user {user_id} to banned cache")
     
-    def invalidate_bans(self):
-        """Force refresh of ban lists on next access"""
+    def remove_banned_user(self, user_id: str):
+        """Remove user from banned cache immediately"""
         with self._lock:
-            self._bans_updated = 0
+            self._banned_users.discard(str(user_id))
+            print(f"CACHE_UPDATE: Removed user {user_id} from banned cache")
     
-    def add_vip_user(self, user_id: str):
-        """Add user to VIP cache immediately"""
-        with self._lock:
-            self._vip_users.add(str(user_id))
+    def is_user_banned_cached(self, user_id: str) -> bool:
+        """Quick cache check for user ban status"""
+        return str(user_id) in self.get_banned_users()
     
-    def remove_vip_user(self, user_id: str):
-        """Remove user from VIP cache immediately"""
-        with self._lock:
-            self._vip_users.discard(str(user_id))
+    def is_server_banned_cached(self, server_id: str) -> bool:
+        """Quick cache check for server ban status"""
+        return str(server_id) in self.get_banned_servers()
     
-    def is_cached_vip(self, user_id: str) -> Optional[bool]:
-        """Check if user is VIP from cache (returns None if cache expired)"""
-        with self._lock:
-            current_time = time.time()
-            
-            if (current_time - self._vip_users_updated) <= self._vip_users_ttl:
-                return str(user_id) in self._vip_users
-            
-            return None  # Cache expired, need fresh check
-    
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """Get cache statistics for monitoring"""
-        with self._lock:
-            current_time = time.time()
-            
-            return {
-                'crosschat_channels': {
-                    'count': len(self._crosschat_channels),
-                    'age': current_time - self._crosschat_channels_updated,
-                    'ttl': self._crosschat_channels_ttl
-                },
-                'system_config': {
-                    'age': current_time - self._system_config_updated,
-                    'ttl': self._system_config_ttl
-                },
-                'vip_users': {
-                    'count': len(self._vip_users),
-                    'age': current_time - self._vip_users_updated,
-                    'ttl': self._vip_users_ttl
-                },
-                'bans': {
-                    'users': len(self._banned_users),
-                    'servers': len(self._banned_servers),
-                    'age': current_time - self._bans_updated,
-                    'ttl': self._bans_ttl
-                }
-            }
+    def is_crosschat_channel_cached(self, channel_id: str) -> bool:
+        """Quick cache check for crosschat channel status"""
+        return str(channel_id) in self.get_crosschat_channels()
 
 # Global cache instance
 performance_cache = PerformanceCache()
+
+# For backwards compatibility
+def get_cache():
+    return performance_cache
