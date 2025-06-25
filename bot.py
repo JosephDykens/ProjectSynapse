@@ -121,6 +121,19 @@ class CrossChatBot(commands.Bot):
         self.start_time = datetime.now(timezone.utc)
         self.commands_registered = False
         
+        # Load bot owner ID from environment
+        owner_id_str = os.environ.get('BOT_OWNER_ID')
+        if owner_id_str and owner_id_str != 'ENTER_YOUR_DISCORD_USER_ID':
+            try:
+                self.owner_id = int(owner_id_str)
+                print(f"✅ Bot owner ID loaded: {self.owner_id}")
+            except ValueError:
+                print(f"❌ Invalid BOT_OWNER_ID format: {owner_id_str}")
+                self.owner_id = None
+        else:
+            print("⚠️ BOT_OWNER_ID not set - owner commands will not work")
+            self.owner_id = None
+        
         # Initialize MongoDB handler for logging
         if not DATABASE_AVAILABLE:
             print("❌ CRITICAL: MongoDB not available - NO DATABASE LOGGING WILL OCCUR")
@@ -1819,7 +1832,7 @@ class CrossChatBot(commands.Bot):
         async def serverban(interaction: discord.Interaction, server_id: str, reason: str = "No reason provided"):
             """Ban a server from cross-chat system"""
             # Only bot owner can use serverban command
-            if interaction.user.id != self.owner_id:
+            if not await self.is_bot_owner(interaction):
                 await interaction.response.send_message("❌ Only authorized staff can use server ban commands", ephemeral=True)
                 return
             
