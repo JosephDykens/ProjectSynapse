@@ -502,12 +502,21 @@ class CrossChatBot(commands.Bot):
             try:
                 await interaction.response.defer()
                 
-                # Get crosschat statistics
+                # Get crosschat statistics from MongoDB
+                channel_count = 0
+                crosschat_channels = []
                 try:
-                    from performance_cache import performance_cache
-                    crosschat_channels = performance_cache.get_crosschat_channels()
-                    channel_count = len(crosschat_channels) if crosschat_channels else 0
-                except:
+                    if hasattr(self, 'cross_chat_manager') and self.cross_chat_manager:
+                        crosschat_channels = self.cross_chat_manager.get_channels()
+                        channel_count = len(crosschat_channels)
+                        print(f"CROSSCHAT_STATS: Found {channel_count} crosschat channels from manager")
+                    elif self.db_handler:
+                        # Fallback to direct MongoDB query
+                        crosschat_channels = self.db_handler.get_crosschat_channels()
+                        channel_count = len(crosschat_channels) if crosschat_channels else 0
+                        print(f"CROSSCHAT_STATS: Found {channel_count} crosschat channels from MongoDB")
+                except Exception as e:
+                    print(f"CROSSCHAT_STATS_ERROR: Failed to get channel count: {e}")
                     channel_count = 0
                 
                 server_count = len(self.guilds)
@@ -528,9 +537,13 @@ class CrossChatBot(commands.Bot):
                 current_channel_id = str(interaction.channel.id)
                 is_crosschat = False
                 try:
-                    is_crosschat = current_channel_id in crosschat_channels
-                except:
-                    pass
+                    # Convert channel IDs to strings for comparison
+                    crosschat_channel_ids = [str(ch_id) for ch_id in crosschat_channels]
+                    is_crosschat = current_channel_id in crosschat_channel_ids
+                    print(f"CROSSCHAT_CHECK: Channel {current_channel_id} in network: {is_crosschat}")
+                except Exception as e:
+                    print(f"CROSSCHAT_CHECK_ERROR: {e}")
+                    is_crosschat = False
                 
                 embed.add_field(
                     name="📍 Current Channel",
