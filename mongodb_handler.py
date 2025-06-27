@@ -210,13 +210,26 @@ class MongoDBHandler:
             self.db.sent_messages.insert_one({
                 "cc_id": cc_id,
                 "channel_id": channel_id,
-                "sent_message_id": sent_message_id,
+                "message_id": sent_message_id,  # Fixed field name for consistency
                 "timestamp": datetime.utcnow()
             })
             return True
         except Exception as e:
             print(f"❌ Error tracking sent message: {e}")
             return False
+
+    def get_sent_messages_by_cc_id(self, cc_id: str) -> List[Dict[str, Any]]:
+        """Get all sent messages for a specific CC-ID for global editing"""
+        try:
+            if not self._ensure_connected():
+                return []
+            
+            messages = list(self.db.sent_messages.find({"cc_id": cc_id}))
+            print(f"🔍 EDIT_LOOKUP: Found {len(messages)} sent messages for CC-ID {cc_id}")
+            return messages
+        except Exception as e:
+            print(f"❌ Error getting sent messages by CC-ID: {e}")
+            return []
 
     def _ensure_connected(self) -> bool:
         """Ensure database connection is active"""
