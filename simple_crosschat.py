@@ -1231,8 +1231,10 @@ class SimpleCrossChat:
                     # Update message in MongoDB
                     self.bot.db_handler.update_crosschat_message(str(after.id), after.content)
                     
-                    # Edit functionality simplified - MongoDB implementation needed
-                    print(f"EDIT_COMPLETE: Updated CrossChat message CC-{cc_id} in database")
+                    # Find and edit all related messages globally
+                    await self._edit_crosschat_globally(cc_id, after.content, str(after.id))
+                    
+                    print(f"EDIT_COMPLETE: Updated CrossChat message CC-{cc_id} globally")
                     return 'processed'
                 else:
                     print("EDIT_SKIP: No CC-ID found for message")
@@ -1246,6 +1248,65 @@ class SimpleCrossChat:
             import traceback
             traceback.print_exc()
             return 'failed'
+
+    async def _edit_crosschat_globally(self, cc_id: str, new_content: str, original_message_id: str):
+        """Edit all crosschat messages globally with the same CC-ID"""
+        try:
+            # Get all crosschat channels
+            channels = self.get_channels()
+            if not channels:
+                print(f"EDIT_GLOBAL_SKIP: No crosschat channels available")
+                return
+
+            print(f"EDIT_GLOBAL: Searching for messages with CC-ID {cc_id} across {len(channels)} channels")
+            
+            # Search for all messages with this CC-ID
+            if hasattr(self.bot, 'db_handler') and self.bot.db_handler:
+                sent_messages = self.bot.db_handler.get_sent_messages_by_cc_id(cc_id)
+                
+                if not sent_messages:
+                    print(f"EDIT_GLOBAL_SKIP: No sent messages found for CC-ID {cc_id}")
+                    return
+                
+                edit_count = 0
+                for sent_msg in sent_messages:
+                    # Skip the original message that was edited
+                    if sent_msg.get('message_id') == original_message_id:
+                        continue
+                    
+                    try:
+                        channel_id = int(sent_msg.get('channel_id'))
+                        message_id = int(sent_msg.get('message_id'))
+                        
+                        channel = self.bot.get_channel(channel_id)
+                        if channel:
+                            # Fetch and edit the message
+                            message = await channel.fetch_message(message_id)
+                            if message and message.author == self.bot.user:
+                                # Parse the current embed to preserve formatting
+                                if message.embeds:
+                                    embed = message.embeds[0]
+                                    # Update the description with new content
+                                    embed.description = new_content
+                                    await message.edit(embed=embed)
+                                    edit_count += 1
+                                    print(f"EDIT_GLOBAL_SUCCESS: Updated message {message_id} in {channel.name}")
+                                else:
+                                    # Fallback for non-embed messages
+                                    await message.edit(content=new_content)
+                                    edit_count += 1
+                                    print(f"EDIT_GLOBAL_SUCCESS: Updated text message {message_id} in {channel.name}")
+                    except Exception as e:
+                        print(f"EDIT_GLOBAL_ERROR: Failed to edit message {sent_msg.get('message_id')}: {e}")
+                
+                print(f"EDIT_GLOBAL_COMPLETE: Updated {edit_count} messages globally for CC-ID {cc_id}")
+            else:
+                print(f"EDIT_GLOBAL_SKIP: No database handler available")
+                
+        except Exception as e:
+            print(f"EDIT_GLOBAL_CRITICAL_ERROR: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def edit_message(self, cc_id: str, new_content: str):
         """Edit a cross-chat message by CC-ID"""
