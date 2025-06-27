@@ -318,13 +318,13 @@ class CrossChatBot(commands.Bot):
             
             embed.add_field(
                 name="🌐 Cross-Chat Commands",
-                value="`/announce` - Send announcements\n`/crosschat` - View network info (Owner)\n`/setup` - Setup crosschat channels (Staff/Owner/Admin)",
+                value="`/announce` - Send announcements (SynapseStaff/Owner) \n`/crosschat` - View network info (Owner)\n`/setup` - Setup crosschat channels (SynapseStaff/Owner/Admin)",
                 inline=False
             )
             
             embed.add_field(
                 name="🛡️ Moderation Commands",
-                value="`/warn` - Warn a user\n`/ban` - Temporarily ban a user\n`/unban` - Remove ban from a user\n`/moderation` - Manage auto-moderation settings",
+                value="`/warn` - Warn a user(SynapseStaff/Owner/Admin)\n`/ban` - Temporarily ban a user(SynapseStaff/Owner)\n`/unban` - Remove ban from a user (SynapseStaff/Owner)(\n`/moderation` - Manage auto-moderation settings (Owner)",
                 inline=False
             )
             
