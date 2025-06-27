@@ -1555,21 +1555,13 @@ class CrossChatBot(commands.Bot):
         
         # PRIVACY PROTECTION: Only handle edits for verified crosschat channels
         try:
-            channel_id = str(after.channel.id)
-            from database_storage_new import database_storage
-            
-            # Get crosschat channels from database
-            # import psycopg2  # MongoDB conversion
-            # conn = psycopg2.connect  # MongoDB conversion(os.environ['DATABASE_URL'])
-            # cursor = # conn.cursor()  # MongoDB conversion
-            active_channels = []  # MongoDB conversion - no database query
-            # cursor.close()
-            # conn.close()
-            
-            is_crosschat_channel = channel_id in active_channels
-            
-            if not is_crosschat_channel:
-                # PRIVACY PROTECTION: NO crosschat processing for non-crosschat channels
+            # Check if this channel is registered for crosschat in database
+            if not (hasattr(self, 'db_handler') and self.db_handler):
+                return
+                
+            crosschat_channels = self.db_handler.get_crosschat_channels()
+            if int(after.channel.id) not in crosschat_channels:
+                # NOT a crosschat channel - do not process edits
                 return
             
         except Exception as e:
@@ -1805,18 +1797,28 @@ class CrossChatBot(commands.Bot):
                     # Process pending DM requests for panel credentials
                     await self.process_panel_credential_dms()
                     
-                    # Get pending commands from database instead of JSON storage
+                    # Get pending commands from MongoDB
                     try:
-                        # Use MongoDB handler for web commands
-                        import json
+                        pending_commands = []
                         
-                        # MongoDB connection via handler - no psycopg2 needed
-                        # Use MongoDB handler for web commands - no web panel integration needed
-                        pending_commands = []  # No web panel commands in current implementation
+                        if hasattr(self, 'db_handler') and self.db_handler.is_available():
+                            # Get pending commands from web_panel_commands collection
+                            pending_docs = list(self.db_handler.db.web_panel_commands.find({
+                                "status": "pending"
+                            }).sort("created_at", 1).limit(10))
+                            
+                            pending_commands = []
+                            for doc in pending_docs:
+                                pending_commands.append({
+                                    'id': str(doc.get('_id')),
+                                    'type': doc.get('command_type'),
+                                    'data': doc.get('command_data', {}),
+                                    'created_at': doc.get('created_at')
+                                })
+                            
+                            if pending_commands:
+                                print(f"Found {len(pending_commands)} pending commands from web panel")
                         
-                        if pending_commands:
-                            pass  # MongoDB conversion - no command processing needed
-                            print(f"Found {len(pending_commands)} pending commands from database")
                     except Exception as e:
                         print(f"Error getting pending commands from database: {e}")
                         import traceback
@@ -1867,18 +1869,49 @@ class CrossChatBot(commands.Bot):
                             
                             # Mark as processing in database
                             try:
-                                if db_handler.is_available():
-                                    pass  # MongoDB conversion - no operations needed
+                                if hasattr(self, 'db_handler') and self.db_handler.is_available():
+                                    from bson import ObjectId
+                                    self.db_handler.db.web_panel_commands.update_one(
+                                        {"_id": ObjectId(command_id)},
+                                        {"$set": {"status": "processing", "started_at": datetime.utcnow()}}
+                                    )
                             except Exception as e:
-                                pass  # MongoDB conversion - ignore errors
+                                print(f"Error marking command as processing: {e}")
                         
                             # Process the command based on type
+                            success = True
+                            error_message = None
+                            
                             if command_type == 'announcement':
                                 await self.process_announcement(command_data)
                             elif command_type == 'ban':
                                 await self.complete_ban_command(command_data)
+                            elif command_type == 'unban':
+                                await self.complete_unban_command(command_data)
                             else:
                                 print(f"Unknown command type: {command_type}")
+                                success = False
+                                error_message = f"Unknown command type: {command_type}"
+                            
+                            # Mark command as completed in database
+                            try:
+                                if hasattr(self, 'db_handler') and self.db_handler.is_available():
+                                    from bson import ObjectId
+                                    status = "completed" if success else "failed"
+                                    update_data = {
+                                        "status": status,
+                                        "completed_at": datetime.utcnow()
+                                    }
+                                    if error_message:
+                                        update_data["error_message"] = error_message
+                                    
+                                    self.db_handler.db.web_panel_commands.update_one(
+                                        {"_id": ObjectId(command_id)},
+                                        {"$set": update_data}
+                                    )
+                                    print(f"✅ Command {command_id} marked as {status}")
+                            except Exception as e:
+                                print(f"Error updating command status: {e}")
                                 
                             # Remove from processing set
                             self.processing_commands.discard(command_id)
@@ -1923,6 +1956,61 @@ class CrossChatBot(commands.Bot):
                     return False
         except Exception as e:
             print(f"Error in announcement processing: {e}")
+            return False
+    
+    async def complete_unban_command(self, command_data):
+        """Process unban command from web panel - removes crosschat service ban only"""
+        try:
+            user_id = command_data.get('user_id')
+            moderator = command_data.get('moderator', 'Web Panel')
+            
+            if not user_id:
+                print("❌ Unban command missing user_id")
+                return False
+            
+            print(f"🔄 Processing unban for user {user_id}")
+            
+            # Remove user from banned_users collection
+            if hasattr(self, 'db_handler') and self.db_handler.is_available():
+                result = self.db_handler.db.banned_users.delete_one({"user_id": str(user_id)})
+                
+                if result.deleted_count > 0:
+                    print(f"✅ Removed crosschat ban for user {user_id}")
+                    
+                    # Log moderation action
+                    self.db_handler.db.moderation_logs.insert_one({
+                        "action_type": "unban",
+                        "user_id": str(user_id),
+                        "moderator": moderator,
+                        "reason": "Unbanned via web panel",
+                        "timestamp": datetime.utcnow()
+                    })
+                    
+                    # Try to send DM to user
+                    try:
+                        user = await self.fetch_user(int(user_id))
+                        if user:
+                            embed = discord.Embed(
+                                title="✅ SynapseChat Ban Removed",
+                                description="Your ban from the SynapseChat cross-chat service has been lifted.",
+                                color=0x00ff00
+                            )
+                            embed.add_field(name="Status", value="You can now participate in cross-chat messages again", inline=False)
+                            await user.send(embed=embed)
+                            print(f"✅ Unban notification sent to {user.name}")
+                    except Exception as dm_error:
+                        print(f"⚠️ Could not send unban DM: {dm_error}")
+                    
+                    return True
+                else:
+                    print(f"⚠️ User {user_id} was not found in banned users list")
+                    return True  # Still success since user is not banned
+            else:
+                print("❌ Database not available for unban operation")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Error processing unban command: {e}")
             return False
         @self.tree.command(name="serverban", description="Ban a server from the cross-chat system")
         @discord.app_commands.describe(
