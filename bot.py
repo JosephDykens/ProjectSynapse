@@ -118,6 +118,10 @@ class CrossChatBot(commands.Bot):
             case_insensitive=True
         )
         
+        # Per-user cooldown tracking for crosschat messages
+        self.crosschat_cooldowns = {}  # {user_id: last_message_timestamp}
+        self.crosschat_cooldown_duration = 7  # seconds (5-10 range, using 7 as middle ground)
+        
         self.start_time = datetime.now(timezone.utc)
         self.commands_registered = False
         
@@ -1518,6 +1522,37 @@ class CrossChatBot(commands.Bot):
             except:
                 pass
             return
+        
+        # Check per-user cooldown to prevent spam
+        user_id = str(message.author.id)
+        current_time = datetime.now().timestamp()
+        
+        if user_id in self.crosschat_cooldowns:
+            time_since_last = current_time - self.crosschat_cooldowns[user_id]
+            if time_since_last < self.crosschat_cooldown_duration:
+                remaining_cooldown = self.crosschat_cooldown_duration - time_since_last
+                try:
+                    await message.delete()
+                    await message.author.send(
+                        f"⏱️ CrossChat Cooldown: Please wait {remaining_cooldown:.1f} more seconds before sending another message."
+                    )
+                    print(f"COOLDOWN: User {message.author.display_name} ({user_id}) blocked for {remaining_cooldown:.1f}s")
+                except Exception as dm_error:
+                    print(f"COOLDOWN_DM_ERROR: Failed to notify {message.author.display_name}: {dm_error}")
+                return
+        
+        # Update user's last message timestamp
+        self.crosschat_cooldowns[user_id] = current_time
+        
+        # Cleanup old entries to prevent memory bloat (keep only last 1000 users)
+        if len(self.crosschat_cooldowns) > 1000:
+            # Remove oldest 200 entries
+            sorted_items = sorted(self.crosschat_cooldowns.items(), key=lambda x: x[1])
+            for old_user_id, _ in sorted_items[:200]:
+                del self.crosschat_cooldowns[old_user_id]
+            print(f"COOLDOWN_CLEANUP: Removed old cooldown entries, now tracking {len(self.crosschat_cooldowns)} users")
+        
+        print(f"COOLDOWN: Updated timestamp for user {message.author.display_name} ({user_id})")
         
         # Check automod before processing crosschat
         try:
