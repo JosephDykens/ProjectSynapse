@@ -1459,24 +1459,8 @@ class CrossChatBot(commands.Bot):
             
             print(f"🔍 DEBUG: Crosschat message in registered channel {message.channel.name}")
             
-            # EARLY COOLDOWN CHECK - Block before any crosschat processing
+            # Process crosschat ONLY for registered channels
             if hasattr(self, 'cross_chat_manager') and self.cross_chat_manager:
-                # Check VIP status first
-                is_vip = await self.cross_chat_manager.is_support_vip(message.author.id)
-                
-                # Check cooldown
-                cooldown_remaining = await self.cross_chat_manager.check_user_cooldown(message.author.id, is_vip)
-                if cooldown_remaining > 0:
-                    print(f"EARLY_COOLDOWN_BLOCK: User {message.author.display_name} ({message.author.id}) blocked by cooldown before processing")
-                    try:
-                        await message.add_reaction('⏰')
-                        # Send DM explaining cooldown
-                        await self.cross_chat_manager.send_cooldown_dm(message.author, cooldown_remaining, is_vip)
-                    except Exception as e:
-                        print(f"EARLY_COOLDOWN_REACTION_ERROR: {e}")
-                    return  # Block the message completely
-                
-                # Process crosschat ONLY for registered channels that pass cooldown
                 result = await self.cross_chat_manager.process(message)
                 print(f"🔍 DEBUG: Crosschat processing result: {result}")
                 
@@ -3708,3 +3692,4 @@ if __name__ == "__main__":
                 time.sleep(60)
     
     asyncio.run(start_bot())
+
