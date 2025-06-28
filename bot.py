@@ -625,164 +625,94 @@ class CrossChatBot(commands.Bot):
             except Exception as e:
                 await interaction.followup.send(f"❌ Error getting crosschat info: {str(e)}", ephemeral=True)
 
-        @commands.hybrid_command(name="setup", description="Setup crosschat in a channel (Staff/Owner/Admin)")
+        @self.tree.command(name="setup", description="Setup crosschat in a channel (Staff/Owner/Admin)")
         @discord.app_commands.describe(
-        action="Action to perform",
-        channel="Channel to setup (optional, defaults to current channel)"
+            action="Action to perform",
+            channel="Channel to setup (optional, defaults to current channel)"
         )
         @discord.app_commands.choices(action=[
-        discord.app_commands.Choice(name="enable", value="enable"),
-        discord.app_commands.Choice(name="disable", value="disable"),
-        discord.app_commands.Choice(name="status", value="status")
+            discord.app_commands.Choice(name="enable", value="enable"),
+            discord.app_commands.Choice(name="disable", value="disable"),
+            discord.app_commands.Choice(name="status", value="status")
         ])
-        async def setup(self, interaction: discord.Interaction, action: str, channel: Optional[discord.TextChannel] = None):
-        """Setup crosschat in current channel"""
-        # Check permissions: Bot Owner or Official Staff (Global access)
-        has_permission = await self.is_bot_owner(interaction)
-        
-        # Check for Official Staff role across all guilds if not bot owner
-        if not has_permission:
-            try:
-                staff_role_id = os.environ.get('STAFF_ROLE_ID')
-                if staff_role_id:
-                    # Check across all guilds where bot can see the user
-                    for guild in self.bot.guilds:
-                        member = guild.get_member(interaction.user.id)
-                        if member and member.roles:
-                            for role in member.roles:
-                                if str(role.id) == str(staff_role_id):
-                                    has_permission = True
-                                    print(f"INFO: Official Staff {interaction.user} using setup command globally")
-                                    break
+        async def setup(interaction: discord.Interaction, action: str, channel: discord.TextChannel = None):
+            """Setup crosschat in current channel"""
+            # Check permissions: Bot Owner or Official Staff (Global access)
+            has_permission = await self.is_bot_owner(interaction)
+            
+            # Check for Official Staff role across all guilds if not bot owner
+            if not has_permission:
+                try:
+                    staff_role_id = os.environ.get('STAFF_ROLE_ID')
+                    if staff_role_id:
+                        # Check across all guilds where bot can see the user
+                        for guild in self.guilds:
+                            member = guild.get_member(interaction.user.id)
+                            if member and member.roles:
+                                for role in member.roles:
+                                    if str(role.id) == str(staff_role_id):
+                                        has_permission = True
+                                        print(f"INFO: Official Staff {interaction.user} using setup command globally")
+                                        break
                             if has_permission:
                                 break
-            except Exception as e:
-                print(f"ERROR: Error checking Official Staff role: {e}")
-        
-        # Fallback: Check if user is server admin in their local server
-        if not has_permission and interaction.user.guild_permissions.administrator:
-            has_permission = True
-            print(f"INFO: Server Admin {interaction.user} using setup command in local server {interaction.guild.name}")
-        
-        if not has_permission:
-            await interaction.response.send_message("❌ You don't have permission to use this command. Required: Bot Owner, Official Staff (Global access), or Server Administrator (Local access).", ephemeral=True)
-            return
-        
-        try:
-            await interaction.response.defer()
-            target_channel = channel if channel else interaction.channel
-            guild_id = str(interaction.guild.id)
-            
-            if action == "enable":
-                # --- NEW SLOWMODE CHECK ---
-                # Reject channels if they don't have 5-10+ second Slowdown enabled.
-                if not (5 <= target_channel.slowmode_delay <= 10):
-                    embed = discord.Embed(
-                        title="🚫 Slowmode Requirement Not Met",
-                        description=f"To enable CrossChat, {target_channel.mention} must have a slowmode delay between **5 and 10 seconds** (inclusive). Current slowmode: `{target_channel.slowmode_delay}` seconds.",
-                        color=0xff0000
-                    )
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                    return
-                # --- END NEW SLOWMODE CHECK ---
-
-                # Check if this server already has a crosschat channel
-                try:
-                    # Ensure performance_cache is accessible (e.g., from an import or passed to the cog)
-                    from performance_cache import performance_cache 
-
-                    crosschat_channels = performance_cache.get_crosschat_channels()
-                    
-                    # Find existing crosschat channels in this guild
-                    existing_channels = []
-                    if crosschat_channels:
-                        for channel_id in crosschat_channels:
-                            ch = self.bot.get_channel(int(channel_id))
-                            if ch and ch.guild and ch.guild.id == interaction.guild.id:
-                                existing_channels.append(ch)
-                    
-                    # Enforce one channel per server limit
-                    if existing_channels:
-                        existing_channel = existing_channels[0]
-                        # Allow changing to a different channel by automatically disabling the old one
-                        if target_channel.id != existing_channel.id:
-                            embed = discord.Embed(
-                                title="🔄 Moving CrossChat Channel",
-                                description=f"CrossChat will be moved from {existing_channel.mention} to {target_channel.mention}",
-                                color=0xffaa00
-                            )
-                            embed.add_field(name="Previous Channel", value=existing_channel.mention, inline=True)
-                            embed.add_field(name="New Channel", value=target_channel.mention, inline=True)
-                            embed.add_field(name="Server Limit", value="Each server can have only ONE CrossChat channel", inline=False)
-                            embed.set_footer(text="The old channel will be automatically disabled")
-                            await interaction.followup.send(embed=embed, ephemeral=True)
-                            # Add your logic here to disable the old channel and enable the new one in performance_cache
-                            return 
-                        else:
-                            embed = discord.Embed(
-                                title="✅ CrossChat Already Enabled",
-                                description=f"CrossChat is already enabled in {target_channel.mention}",
-                                color=0x00ff00
-                            )
-                            embed.add_field(name="Status", value="This channel is already your server's CrossChat channel", inline=False)
-                            await interaction.followup.send(embed=embed, ephemeral=True)
-                            return
-                    
-                    # If no existing channel, proceed with enabling the target_channel
-                    # Add your logic here to enable crosschat for target_channel in performance_cache
-                    embed = discord.Embed(
-                        title="✅ CrossChat Enabled",
-                        description=f"CrossChat has been successfully enabled in {target_channel.mention}",
-                        color=0x00ff00
-                    )
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-
                 except Exception as e:
-                    print(f"ERROR: Error checking/setting crosschat channel: {e}")
-                    await interaction.followup.send(f"❌ An error occurred while trying to enable CrossChat: {e}", ephemeral=True)
-
-            elif action == "disable":
-                # Add your logic here to disable crosschat for the guild
-                embed = discord.Embed(
-                    title="🚫 CrossChat Disabled",
-                    description=f"CrossChat has been successfully disabled for this server.",
-                    color=0xff0000
-                )
-                await interaction.followup.send(embed=embed, ephemeral=True)
+                    print(f"ERROR: Error checking Official Staff role: {e}")
             
-            elif action == "status":
-                # Add your logic here to show the current crosschat status
-                try:
-                    from performance_cache import performance_cache # Ensure this is accessible
-                    crosschat_channels = performance_cache.get_crosschat_channels()
-                    current_crosschat_channel = None
-                    if crosschat_channels:
-                        for channel_id in crosschat_channels:
-                            ch = self.bot.get_channel(int(channel_id))
-                            if ch and ch.guild and ch.guild.id == interaction.guild.id:
-                                current_crosschat_channel = ch
-                                break
-                    
-                    if current_crosschat_channel:
-                        embed = discord.Embed(
-                            title="ℹ️ CrossChat Status",
-                            description=f"CrossChat is currently enabled in {current_crosschat_channel.mention}",
-                            color=0x007bff
-                        )
-                    else:
-                        embed = discord.Embed(
-                            title="ℹ️ CrossChat Status",
-                            description="CrossChat is currently **not enabled** in any channel for this server.",
-                            color=0x007bff
-                        )
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                except Exception as e:
-                    print(f"ERROR: Error getting crosschat status: {e}")
-                    await interaction.followup.send(f"❌ An error occurred while trying to get CrossChat status: {e}", ephemeral=True)
-
-        except Exception as e:
-            print(f"ERROR: An unexpected error occurred in setup command: {e}")
-            await interaction.followup.send(f"❌ An unexpected error occurred: {e}", ephemeral=True)
+            # Fallback: Check if user is server admin in their local server
+            if not has_permission and interaction.user.guild_permissions.administrator:
+                has_permission = True
+                print(f"INFO: Server Admin {interaction.user} using setup command in local server {interaction.guild.name}")
+            
+            if not has_permission:
+                await interaction.response.send_message("❌ You don't have permission to use this command. Required: Bot Owner, Official Staff (Global access), or Server Administrator (Local access).", ephemeral=True)
+                return
+            
+            try:
+                await interaction.response.defer()
+                target_channel = channel if channel else interaction.channel
+                guild_id = str(interaction.guild.id)
+                
+                if action == "enable":
+                    # Check if this server already has a crosschat channel
+                    try:
+                        from performance_cache import performance_cache
+                        crosschat_channels = performance_cache.get_crosschat_channels()
+                        
+                        # Find existing crosschat channels in this guild
+                        existing_channels = []
+                        if crosschat_channels:
+                            for channel_id in crosschat_channels:
+                                ch = self.get_channel(int(channel_id))
+                                if ch and ch.guild.id == interaction.guild.id:
+                                    existing_channels.append(ch)
+                        
+                        # Enforce one channel per server limit
+                        if existing_channels:
+                            existing_channel = existing_channels[0]
+                            # Allow changing to a different channel by automatically disabling the old one
+                            if target_channel.id != existing_channel.id:
+                                embed = discord.Embed(
+                                    title="🔄 Moving CrossChat Channel",
+                                    description=f"CrossChat will be moved from {existing_channel.mention} to {target_channel.mention}",
+                                    color=0xffaa00
+                                )
+                                embed.add_field(name="Previous Channel", value=existing_channel.mention, inline=True)
+                                embed.add_field(name="New Channel", value=target_channel.mention, inline=True)
+                                embed.add_field(name="Server Limit", value="Each server can have only ONE CrossChat channel", inline=False)
+                                embed.set_footer(text="The old channel will be automatically disabled")
+                            else:
+                                embed = discord.Embed(
+                                    title="✅ CrossChat Already Enabled",
+                                    description=f"CrossChat is already enabled in {target_channel.mention}",
+                                    color=0x00ff00
+                                )
+                                embed.add_field(name="Status", value="This channel is already your server's CrossChat channel", inline=False)
+                                await interaction.followup.send(embed=embed, ephemeral=True)
+                                return
+                            
+                    except Exception as e:
+                        print(f"Error checking existing crosschat channels: {e}")
                     
                     # FORCE LOG to MongoDB database with verification
                     setup_logged = False
@@ -3762,3 +3692,4 @@ if __name__ == "__main__":
                 time.sleep(60)
     
     asyncio.run(start_bot())
+
