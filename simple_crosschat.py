@@ -59,9 +59,6 @@ class SimpleCrossChat:
         # VIP processing queues
         self.vip_queue = asyncio.Queue()
         self.standard_queue = asyncio.Queue()
-        # User cooldown tracking
-        self.user_last_message = {}  # user_id -> timestamp
-        self.cooldown_seconds = 8  # Default 8 seconds cooldown
         self._initialized = True
         print(f"SIMPLE_SINGLETON: Initialization complete")
 
@@ -336,32 +333,6 @@ class SimpleCrossChat:
             print(f"SIMPLE: Error checking server ban: {e}")
             return False
     
-    async def check_user_cooldown(self, user_id, is_vip=False):
-        """Check if user is within cooldown period"""
-        try:
-            current_time = time.time()
-            user_key = str(user_id)
-            
-            # VIP users get reduced cooldown (3 seconds)
-            cooldown_time = 3 if is_vip else self.cooldown_seconds
-            
-            if user_key in self.user_last_message:
-                last_message_time = self.user_last_message[user_key]
-                time_since_last = current_time - last_message_time
-                
-                if time_since_last < cooldown_time:
-                    remaining_cooldown = cooldown_time - time_since_last
-                    print(f"COOLDOWN: User {user_id} on cooldown - {remaining_cooldown:.1f}s remaining")
-                    return remaining_cooldown
-            
-            # Update last message time
-            self.user_last_message[user_key] = current_time
-            return 0  # No cooldown
-            
-        except Exception as e:
-            print(f"COOLDOWN_ERROR: Failed to check cooldown for user {user_id}: {e}")
-            return 0  # Allow message on error
-    
     async def check_automod(self, message):
         """Check message against automod rules, return reason if blocked"""
         try:
@@ -442,37 +413,6 @@ class SimpleCrossChat:
                 
         except Exception as e:
             print(f"SIMPLE: Failed to send automod warning to {user.name}: {e}")
-    
-    async def send_cooldown_dm(self, user, remaining_time, is_vip):
-        """Send DM to user explaining cooldown"""
-        try:
-            cooldown_type = "VIP (3 seconds)" if is_vip else "Standard (8 seconds)"
-            
-            embed = discord.Embed(
-                title="⏰ Message Cooldown",
-                description=f"Please wait **{remaining_time:.1f} seconds** before sending another message.",
-                color=0xffa500,
-                timestamp=datetime.utcnow()
-            )
-            embed.add_field(name="Cooldown Type", value=cooldown_type, inline=True)
-            embed.add_field(
-                name="Why cooldowns?", 
-                value="Cooldowns help prevent spam and ensure a better experience for everyone in CrossChat.", 
-                inline=False
-            )
-            if not is_vip:
-                embed.add_field(
-                    name="💎 Want faster messaging?", 
-                    value="VIP members get reduced cooldowns! Check our support server for VIP benefits.", 
-                    inline=False
-                )
-            embed.set_footer(text="SynapseChat Anti-Spam System")
-            
-            await user.send(embed=embed)
-            print(f"COOLDOWN_DM: Sent cooldown notification to {user.name} ({user.id}) - {remaining_time:.1f}s remaining")
-            
-        except Exception as e:
-            print(f"COOLDOWN_DM: Failed to send cooldown DM to {user.name}: {e}")
     
     def get_tag_hierarchy_level(self, user_roles, guild, user_id=None, is_vip=False):
         """Determine user's tag hierarchy level based on roles
@@ -616,22 +556,7 @@ class SimpleCrossChat:
             print(f"❌ CRITICAL: Current channel {message.channel.id} not in channels list {channels}")
             return None
         
-        # VIP STATUS CHECK - Early detection for fast-track processing
-        is_vip = await self.is_support_vip(message.author.id)
-        
-        # COOLDOWN CHECK - Prevent spam with per-user cooldowns (BEFORE database logging)
-        cooldown_remaining = await self.check_user_cooldown(message.author.id, is_vip)
-        if cooldown_remaining > 0:
-            print(f"COOLDOWN_BLOCK: User {message.author.display_name} ({message.author.id}) blocked by cooldown")
-            try:
-                await message.add_reaction('⏰')
-                # Send DM explaining cooldown
-                await self.send_cooldown_dm(message.author, cooldown_remaining, is_vip)
-            except Exception as e:
-                print(f"COOLDOWN_REACTION_ERROR: {e}")
-            return 'cooldown'
-
-        # IMMEDIATE DUPLICATE PREVENTION - Log processing start to prevent race conditions (AFTER cooldown check)
+        # IMMEDIATE DUPLICATE PREVENTION - Log processing start to prevent race conditions
         print(f"🔍 DUPLICATE_CHECK: Checking if message {message_id} already processed")
         existing = None
         if hasattr(self.bot, 'db_handler') and self.bot.db_handler:
@@ -662,6 +587,9 @@ class SimpleCrossChat:
                 except Exception as e:
                     print(f"⚠️ PROCESSING_LOCK_FAILED: Could not mark processing: {e}")
             print(f"✅ DUPLICATE_CHECK: Message {message_id} ready for processing")
+        
+        # VIP STATUS CHECK - Early detection for fast-track processing
+        is_vip = await self.is_support_vip(message.author.id)
         
         # ELITE VIP CHECK - GLOBAL check across all guilds for VIP_ROLE_ID2
         import os
@@ -805,15 +733,15 @@ class SimpleCrossChat:
             # Get channels for distribution
             print(f"SIMPLE: Found {len(channels)} channels for distribution")
         
-        # Generate CC-ID ONCE for both VIP and standard users (after all checks)
-        cc_id = self.generate_cc_id(message.id, is_vip=is_vip, message=message)
-        
-        # Add processing reaction ONLY after all blocking checks pass
+        # Add processing reaction immediately
         try:
             await message.add_reaction('⏳')
             print(f"PROCESSING_REACTION: Added ⏳ to message {message.id}")
         except Exception as e:
             print(f"PROCESSING_REACTION_ERROR: Failed to add processing reaction: {e}")
+        
+        # Generate CC-ID ONCE for both VIP and standard users (after all checks)
+        cc_id = self.generate_cc_id(message.id, is_vip=is_vip, message=message)
         print(f"SIMPLE: Generated CC-ID {cc_id} for message {message.id} (VIP: {is_vip})")
         
         # Create embed for crosschat display with hierarchy and VIP support
