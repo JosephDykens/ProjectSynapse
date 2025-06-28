@@ -9,6 +9,7 @@ import re
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
+import discord # Added this import for discord.Embed and bot.fetch_user
 
 class AutoModerationManager:
     """Simplified auto-moderation for self-hosted bot"""
@@ -31,12 +32,17 @@ class AutoModerationManager:
             'caps_threshold': 70,  # percentage of caps
             'link_filter': True,
             'invite_filter': True,
-            'profanity_filter': True
+            'profanity_filter': True,
+            # MODIFIED: Global cooldown range [min_seconds, max_seconds]
+            'global_ratelimit_range_seconds': [5, 10] 
         }
         
         # Spam tracking
         self.user_message_history = {}
         self.duplicate_messages = {}
+        
+        # NEW: Global ratelimit tracking
+        self.user_last_message_time = {} # Stores the last time a user sent a message
         
         # 15-minute TTL regex cache for performance optimization
         self.regex_cache = {}
@@ -46,7 +52,7 @@ class AutoModerationManager:
         # Automod violation tracking for automatic warnings/bans
         self.automod_violations = {}  # Track violations per user
         self.violation_threshold = 3  # Violations before formal warning
-        self.warning_threshold = 3   # Warnings before ban
+        self.warning_threshold = 3    # Warnings before ban
         self.ban_duration_minutes = 20  # Ban duration in minutes
         
         # Whitelist system for users who bypass automod
@@ -121,12 +127,12 @@ class AutoModerationManager:
             r'pr[i1]ck[s\$]?',
             r'pu[s\$][s\$][i1][e3][s\$]',
             r'pu[s\$][s\$]y[s\$]?',
-            r'[s\$][e3]x',
-            r'[s\$]h[i1][t\+][s\$]?',
-            r'[s\$][l1]u[t\+][s\$]?',
-            r'[s\$]mu[t\+][s\$]?',
-            r'[s\$]punk[s\$]?',
-            r'[t\+]w[a@][t\+][s\$]?'
+            '[s\$][e3]x',
+            '[s\$]h[i1][t\+][s\$]?',
+            '[s\$][l1]u[t\+][s\$]?',
+            '[s\$]mu[t\+][s\$]?',
+            '[s\$]punk[s\$]?',
+            '[t\+]w[a@][t\+][s\$]?'
         ]
         
         # Phone number patterns (various formats)
@@ -135,7 +141,7 @@ class AutoModerationManager:
             r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',  # 123-456-7890, 123.456.7890, 123 456 7890
             r'\(\d{3}\)\s?\d{3}[-.\s]?\d{4}',      # (123) 456-7890, (123)456-7890
             r'\+\d{1,3}[-.\s]?\d{3,4}[-.\s]?\d{3,4}[-.\s]?\d{3,4}',  # International +1-123-456-7890
-            r'\b\d{10,15}\b',                       # Long digit strings (10-15 digits)
+            r'\b\d{10,15}\b',                          # Long digit strings (10-15 digits)
             r'\d{3}\s?\d{3}\s?\d{4}',              # 123 456 7890
             r'\b1[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',  # 1-123-456-7890
         ]
@@ -225,6 +231,35 @@ class AutoModerationManager:
         # Check if user is whitelisted (bypasses all automod)
         if await self._is_user_whitelisted(message.author, message):
             return {'action': 'allow', 'reason': 'user_whitelisted'}
+
+        # MODIFIED: Stricter Global Rate Limit check (5-10 seconds)
+        now = time.time()
+        min_cooldown = self.settings['global_ratelimit_range_seconds'][5]
+        max_cooldown = self.settings['global_ratelimit_range_seconds'][10]
+
+        if user_id in self.user_last_message_time:
+            time_since_last_message = now - self.user_last_message_time[user_id]
+            
+            # If time since last message is between min and max cooldown, block it
+            if min_cooldown <= time_since_last_message <= max_cooldown:
+                self.user_last_message_time[user_id] = now # Update last message time only if blocked (optional, see notes below)
+                return {
+                    'action': 'delete', 
+                    'reason': 'global_ratelimit',
+                    'details': f'Message sent too quickly. Please wait between {min_cooldown} and {max_cooldown} seconds between messages.'
+                }
+            # If message is sent faster than min_cooldown, also block (e.g., 2 seconds)
+            elif time_since_last_message < min_cooldown:
+                self.user_last_message_time[user_id] = now # Update last message time only if blocked (optional)
+                return {
+                    'action': 'delete', 
+                    'reason': 'global_ratelimit_too_fast',
+                    'details': f'Message sent too quickly (less than {min_cooldown} seconds since last message).'
+                }
+        
+        # Update last message time for ALL messages that pass the rate limit check
+        # This ensures the cooldown starts from the *last allowed* message.
+        self.user_last_message_time[user_id] = now 
         
         # Check spam
         spam_result = await self._check_spam(user_id, message)
@@ -262,12 +297,12 @@ class AutoModerationManager:
         # Check phone numbers
         phone_result = await self._check_phone_numbers(content)
         if phone_result['action'] != 'allow':
-            return phone_result
+                return phone_result
         
         # Check addresses
         address_result = await self._check_addresses(content)
         if address_result['action'] != 'allow':
-            return address_result
+                return address_result
         
         return {'action': 'allow', 'reason': 'clean_message'}
     
@@ -524,7 +559,7 @@ class AutoModerationManager:
                     await asyncio.sleep(5)
                     try:
                         await warning_msg.delete()
-                    except:
+                    except Exception: # Catch potential errors if message already deleted or permissions issues
                         pass
                         
             elif action == 'warn':
@@ -539,7 +574,7 @@ class AutoModerationManager:
                     await asyncio.sleep(3)
                     try:
                         await warning_msg.delete()
-                    except:
+                    except Exception: # Catch potential errors if message already deleted or permissions issues
                         pass
                         
         except Exception as e:
@@ -716,16 +751,11 @@ class AutoModerationManager:
         except Exception as e:
             print(f"❌ Error issuing service ban to user {user_id}: {e}")
     
-    def update_settings(self, new_settings: Dict[str, Any]):
-        """Update moderation settings"""
-        self.settings.update(new_settings)
-        print(f"🔧 Auto-moderation settings updated: {new_settings}")
-    
     def enable(self):
         """Enable auto-moderation"""
         self.enabled = True
         print("✅ Auto-moderation enabled")
-    
+        
     def disable(self):
         """Disable auto-moderation"""
         self.enabled = False
