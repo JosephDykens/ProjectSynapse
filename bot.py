@@ -626,16 +626,16 @@ class CrossChatBot(commands.Bot):
                 await interaction.followup.send(f"❌ Error getting crosschat info: {str(e)}", ephemeral=True)
 
         @commands.hybrid_command(name="setup", description="Setup crosschat in a channel (Staff/Owner/Admin)")
-    @discord.app_commands.describe(
+        @discord.app_commands.describe(
         action="Action to perform",
         channel="Channel to setup (optional, defaults to current channel)"
-    )
-    @discord.app_commands.choices(action=[
+        )
+        @discord.app_commands.choices(action=[
         discord.app_commands.Choice(name="enable", value="enable"),
         discord.app_commands.Choice(name="disable", value="disable"),
         discord.app_commands.Choice(name="status", value="status")
-    ])
-    async def setup(self, interaction: discord.Interaction, action: str, channel: Optional[discord.TextChannel] = None):
+        ])
+        async def setup(self, interaction: discord.Interaction, action: str, channel: Optional[discord.TextChannel] = None):
         """Setup crosschat in current channel"""
         # Check permissions: Bot Owner or Official Staff (Global access)
         has_permission = await self.is_bot_owner(interaction)
