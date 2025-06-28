@@ -616,7 +616,22 @@ class SimpleCrossChat:
             print(f"❌ CRITICAL: Current channel {message.channel.id} not in channels list {channels}")
             return None
         
-        # IMMEDIATE DUPLICATE PREVENTION - Log processing start to prevent race conditions
+        # VIP STATUS CHECK - Early detection for fast-track processing
+        is_vip = await self.is_support_vip(message.author.id)
+        
+        # COOLDOWN CHECK - Prevent spam with per-user cooldowns (BEFORE database logging)
+        cooldown_remaining = await self.check_user_cooldown(message.author.id, is_vip)
+        if cooldown_remaining > 0:
+            print(f"COOLDOWN_BLOCK: User {message.author.display_name} ({message.author.id}) blocked by cooldown")
+            try:
+                await message.add_reaction('⏰')
+                # Send DM explaining cooldown
+                await self.send_cooldown_dm(message.author, cooldown_remaining, is_vip)
+            except Exception as e:
+                print(f"COOLDOWN_REACTION_ERROR: {e}")
+            return 'cooldown'
+
+        # IMMEDIATE DUPLICATE PREVENTION - Log processing start to prevent race conditions (AFTER cooldown check)
         print(f"🔍 DUPLICATE_CHECK: Checking if message {message_id} already processed")
         existing = None
         if hasattr(self.bot, 'db_handler') and self.bot.db_handler:
@@ -647,21 +662,6 @@ class SimpleCrossChat:
                 except Exception as e:
                     print(f"⚠️ PROCESSING_LOCK_FAILED: Could not mark processing: {e}")
             print(f"✅ DUPLICATE_CHECK: Message {message_id} ready for processing")
-        
-        # VIP STATUS CHECK - Early detection for fast-track processing
-        is_vip = await self.is_support_vip(message.author.id)
-        
-        # COOLDOWN CHECK - Prevent spam with per-user cooldowns
-        cooldown_remaining = await self.check_user_cooldown(message.author.id, is_vip)
-        if cooldown_remaining > 0:
-            print(f"COOLDOWN_BLOCK: User {message.author.display_name} ({message.author.id}) blocked by cooldown")
-            try:
-                await message.add_reaction('⏰')
-                # Send DM explaining cooldown
-                await self.send_cooldown_dm(message.author, cooldown_remaining, is_vip)
-            except Exception as e:
-                print(f"COOLDOWN_REACTION_ERROR: {e}")
-            return 'cooldown'
         
         # ELITE VIP CHECK - GLOBAL check across all guilds for VIP_ROLE_ID2
         import os
