@@ -118,8 +118,6 @@ class CrossChatBot(commands.Bot):
             case_insensitive=True
         )
         
-
-        
         self.start_time = datetime.now(timezone.utc)
         self.commands_registered = False
         
@@ -1475,10 +1473,19 @@ class CrossChatBot(commands.Bot):
             
             print(f"🔍 DEBUG: Crosschat message in registered channel {message.channel.name}")
             
+            # Process crosschat ONLY for registered channels
+            if hasattr(self, 'cross_chat_manager') and self.cross_chat_manager:
+                result = await self.cross_chat_manager.process(message)
+                print(f"🔍 DEBUG: Crosschat processing result: {result}")
+                
         except Exception as e:
             print(f"❌ CRITICAL: Message processing error: {e}")
-            return
             
+        except Exception as e:
+            print(f"PRIVACY_CHECK: Failed to verify crosschat channel: {e}")
+            # If verification fails, protect privacy by not processing crosschat
+            return
+    
         # Only process crosschat for verified crosschat channels
         print(f"CROSSCHAT_MESSAGE: {message.guild.name}#{message.channel.name} - {message.author.display_name}")
         
@@ -1511,8 +1518,6 @@ class CrossChatBot(commands.Bot):
             except:
                 pass
             return
-        
-
         
         # Check automod before processing crosschat
         try:
