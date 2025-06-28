@@ -674,6 +674,20 @@ class CrossChatBot(commands.Bot):
                 guild_id = str(interaction.guild.id)
                 
                 if action == "enable":
+                    # Check if channel has required slowmode (5-10 seconds)
+                    if target_channel.slowmode_delay < 5 or target_channel.slowmode_delay > 10:
+                        embed = discord.Embed(
+                            title="❌ Slowmode Required",
+                            description=f"CrossChat channels must have a slowmode between 5-10 seconds to prevent spam.",
+                            color=0xff0000
+                        )
+                        embed.add_field(name="Current Slowmode", value=f"{target_channel.slowmode_delay} seconds", inline=True)
+                        embed.add_field(name="Required Slowmode", value="5-10 seconds", inline=True)
+                        embed.add_field(name="Action Required", value="Please set the channel slowmode to 5-10 seconds before enabling CrossChat", inline=False)
+                        embed.set_footer(text="You can set slowmode in channel settings or use Discord's built-in slowmode feature")
+                        await interaction.followup.send(embed=embed, ephemeral=True)
+                        return
+                    
                     # Check if this server already has a crosschat channel
                     try:
                         from performance_cache import performance_cache
