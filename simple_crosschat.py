@@ -805,15 +805,15 @@ class SimpleCrossChat:
             # Get channels for distribution
             print(f"SIMPLE: Found {len(channels)} channels for distribution")
         
-        # Add processing reaction immediately
+        # Generate CC-ID ONCE for both VIP and standard users (after all checks)
+        cc_id = self.generate_cc_id(message.id, is_vip=is_vip, message=message)
+        
+        # Add processing reaction ONLY after all blocking checks pass
         try:
             await message.add_reaction('⏳')
             print(f"PROCESSING_REACTION: Added ⏳ to message {message.id}")
         except Exception as e:
             print(f"PROCESSING_REACTION_ERROR: Failed to add processing reaction: {e}")
-        
-        # Generate CC-ID ONCE for both VIP and standard users (after all checks)
-        cc_id = self.generate_cc_id(message.id, is_vip=is_vip, message=message)
         print(f"SIMPLE: Generated CC-ID {cc_id} for message {message.id} (VIP: {is_vip})")
         
         # Create embed for crosschat display with hierarchy and VIP support
