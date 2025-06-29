@@ -776,7 +776,7 @@ class SimpleCrossChat:
                     image_attachment = attachment
                     break
         
-        embed.set_footer(text=f"CC-{cc_id}")
+        embed.set_footer(text=f"CC-{cc_id} • ID: {message.author.id}")
         
         # Database logging: Standard users logged immediately, VIP users logged after distribution
         log_data = {
@@ -1323,6 +1323,16 @@ class SimpleCrossChat:
                 print(f"SIMPLE_EDIT: No sent messages found for CC-ID {cc_id}")
                 return False
             
+            # Get user ID from database for footer
+            user_id = "Unknown"
+            try:
+                if hasattr(self.bot, 'db_handler') and self.bot.db_handler:
+                    message_record = self.bot.db_handler.get_crosschat_message(str(original_message_id))
+                    if message_record and message_record.get('user_id'):
+                        user_id = message_record['user_id']
+            except Exception as e:
+                print(f"SIMPLE_EDIT: Failed to get user ID from database: {e}")
+            
             # Create updated embed
             embed = discord.Embed(
                 description=new_content,
@@ -1337,8 +1347,8 @@ class SimpleCrossChat:
                 inline=False
             )
             
-            # Add footer with CC-ID
-            embed.set_footer(text=f"CC-{cc_id}")
+            # Add footer with CC-ID and user ID
+            embed.set_footer(text=f"CC-{cc_id} • ID: {user_id}")
             
             # Edit all sent messages
             edit_count = 0
