@@ -332,7 +332,7 @@ class CrossChatBot(commands.Bot):
 
         @self.tree.command(name="announce", description="Send announcement to all cross-chat channels (Owner/Staff only)")
         @discord.app_commands.describe(
-            message="Announcement message",
+            message="Announcement message (supports markdown & multiline: use \\n for new lines, **bold**, *italic*, `code`, etc.)",
             anonymous="Send announcement anonymously"
         )
         async def announce(interaction: discord.Interaction, message: str, anonymous: bool = False):
@@ -363,8 +363,11 @@ class CrossChatBot(commands.Bot):
             try:
                 await interaction.response.defer()
                 
+                # Process multiline formatting - convert \n to actual newlines
+                formatted_message = message.replace('\\n', '\n')
+                
                 if hasattr(self, 'cross_chat_manager') and self.cross_chat_manager:
-                    result = await self.cross_chat_manager.send_announcement(message)
+                    result = await self.cross_chat_manager.send_announcement(formatted_message)
                     
                     channels_sent = result if isinstance(result, int) else 0
                     embed = discord.Embed(
@@ -3519,6 +3522,10 @@ class CrossChatBot(commands.Bot):
         """Execute announcement command from web panel"""
         message = command_data.get('message')
         anonymous = command_data.get('anonymous', False)
+        
+        # Process multiline formatting - convert \n to actual newlines
+        if message:
+            message = message.replace('\\n', '\n')
         
         try:
             # Get all crosschat channels
