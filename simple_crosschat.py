@@ -1126,9 +1126,21 @@ class SimpleCrossChat:
             channels = self.get_channels()
             sent_count = 0
             
+            # Process multiline formatting - convert \n to actual newlines
+            # Also handle markdown formatting edge cases
+            formatted_content = content.replace('\\n', '\n')
+            
+            # Fix markdown formatting issues with newlines
+            # Ensure bold/italic markers are properly closed before newlines
+            import re
+            # Find unclosed bold markers followed by newlines
+            formatted_content = re.sub(r'\*\*([^*\n]+)\*\*\n', r'**\1**\n', formatted_content)
+            # Find unclosed italic markers followed by newlines  
+            formatted_content = re.sub(r'\*([^*\n]+)\*\n', r'*\1*\n', formatted_content)
+            
             embed = discord.Embed(
                 title="📢 Announcement",
-                description=content,
+                description=formatted_content,
                 color=0xff9900,
                 timestamp=datetime.utcnow()
             )
