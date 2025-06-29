@@ -11,6 +11,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 import threading
 from flask import Flask
+import aiohttp
+import json
 
 def init_database():
     """Initialize MongoDB connection for database logging"""
@@ -64,6 +66,86 @@ DATABASE_AVAILABLE = DATABASE_TYPE == 'mongodb'
 
 # Simple Discord logging - sends summary every 60 seconds
 CONSOLE_LOG_CHANNEL_ID = 1386454256000831731
+
+# Moderation webhook configuration
+MODERATION_WEBHOOK_URL = os.environ.get('MODERATION_WEBHOOK_URL')
+STAFF_ROLE_ID = os.environ.get('STAFF_ROLE_ID')
+
+async def send_moderation_webhook(action_type: str, moderator_user, target_user, reason: str, additional_info: dict = None, is_local_admin: bool = False):
+    """Send moderation action to webhook with staff ping if issued by local admin"""
+    if not MODERATION_WEBHOOK_URL:
+        print("⚠️ MODERATION_WEBHOOK_URL not configured - webhook logging disabled")
+        return False
+    
+    try:
+        # Determine action color
+        color_map = {
+            "warning": 0xffaa00,  # Orange
+            "ban": 0xff0000,      # Red
+            "unban": 0x00ff00     # Green
+        }
+        color = color_map.get(action_type.lower(), 0x0099ff)
+        
+        # Build embed
+        embed = {
+            "title": f"🛡️ Moderation Action: {action_type.title()}",
+            "color": color,
+            "timestamp": datetime.utcnow().isoformat(),
+            "fields": [
+                {
+                    "name": "Target User",
+                    "value": f"{target_user.name}#{target_user.discriminator}\nID: `{target_user.id}`",
+                    "inline": True
+                },
+                {
+                    "name": "Moderator",
+                    "value": f"{moderator_user.name}#{moderator_user.discriminator}\nID: `{moderator_user.id}`",
+                    "inline": True
+                },
+                {
+                    "name": "Action Type",
+                    "value": "🔴 Local Admin Action" if is_local_admin else "🟢 Staff/Owner Action",
+                    "inline": True
+                },
+                {
+                    "name": "Reason",
+                    "value": reason,
+                    "inline": False
+                }
+            ]
+        }
+        
+        # Add additional info if provided
+        if additional_info:
+            for key, value in additional_info.items():
+                embed["fields"].append({
+                    "name": key,
+                    "value": str(value),
+                    "inline": True
+                })
+        
+        # Build webhook payload
+        webhook_data = {
+            "embeds": [embed]
+        }
+        
+        # Add staff ping for local admin actions
+        if is_local_admin and STAFF_ROLE_ID:
+            webhook_data["content"] = f"⚠️ <@&{STAFF_ROLE_ID}> Local Admin moderation action requires attention!"
+        
+        # Send webhook
+        async with aiohttp.ClientSession() as session:
+            async with session.post(MODERATION_WEBHOOK_URL, json=webhook_data) as response:
+                if response.status == 204:
+                    print(f"✅ Moderation webhook sent: {action_type} action logged")
+                    return True
+                else:
+                    print(f"❌ Webhook failed with status {response.status}: {await response.text()}")
+                    return False
+                    
+    except Exception as webhook_error:
+        print(f"❌ Webhook error: {webhook_error}")
+        return False
 
 class SimpleDiscordLogger:
     """Simple Discord logger that collects important events and sends summary every 60 seconds"""
@@ -364,9 +446,9 @@ class CrossChatBot(commands.Bot):
             
             await interaction.response.send_message(embed=embed)
 
-        @self.tree.command(name="warn", description="Warn a user for violations")
-        @discord.app_commands.describe(user="User to warn", reason="Reason for warning")
-        async def warn(interaction: discord.Interaction, user: discord.Member, reason: str = "No reason provided"):
+        @self.tree.command(name="warn", description="Warn a user for violations (supports Discord ID for global warnings)")
+        @discord.app_commands.describe(user_id="User to warn (Discord ID or @mention)", reason="Reason for warning")
+        async def warn(interaction: discord.Interaction, user_id: str, reason: str = "No reason provided"):
             has_permission = await self.is_bot_owner(interaction)
             if not has_permission:
                 staff_role_id = os.environ.get('STAFF_ROLE_ID')
@@ -382,26 +464,78 @@ class CrossChatBot(commands.Bot):
             try:
                 await interaction.response.defer()
                 
+                # Parse user ID from input (handle mentions like <@123456789> or raw IDs)
+                clean_user_id = user_id.strip()
+                if clean_user_id.startswith('<@') and clean_user_id.endswith('>'):
+                    # Extract ID from mention format <@123456789> or <@!123456789>
+                    clean_user_id = clean_user_id[2:-1].lstrip('!')
+                
+                try:
+                    target_user_id = int(clean_user_id)
+                except ValueError:
+                    await interaction.followup.send("❌ Invalid user ID format. Please provide a Discord user ID (numbers only) or @mention the user.", ephemeral=True)
+                    return
+                
+                # Try to find the user across all guilds the bot can see
+                target_user = None
+                found_in_guild = None
+                
+                # First, try to get the user from the current guild
+                if interaction.guild:
+                    target_user = interaction.guild.get_member(target_user_id)
+                    if target_user:
+                        found_in_guild = interaction.guild
+                
+                # If not found locally, search across all guilds for global warnings
+                if not target_user:
+                    for guild in self.guilds:
+                        member = guild.get_member(target_user_id)
+                        if member:
+                            target_user = member
+                            found_in_guild = guild
+                            break
+                
+                # If still not found, try to fetch user info from Discord API
+                if not target_user:
+                    try:
+                        target_user = await self.fetch_user(target_user_id)
+                        print(f"INFO: Global warning - user {target_user.name} ({target_user_id}) found via API")
+                    except discord.NotFound:
+                        await interaction.followup.send(f"❌ User with ID `{target_user_id}` not found. The user may not exist or the bot cannot access them.", ephemeral=True)
+                        return
+                    except Exception as fetch_error:
+                        await interaction.followup.send(f"❌ Error fetching user: {str(fetch_error)}", ephemeral=True)
+                        return
+                
                 # Log warning to database
-                print(f"🔍 DEBUG: FORCE LOGGING warning for user {user.id}")
+                print(f"🔍 DEBUG: FORCE LOGGING warning for user {target_user.id}")
                 warning_logged = False
                 if self.db_handler:
                     warning_logged = self.db_handler.add_warning(
-                        user_id=str(user.id),
+                        user_id=str(target_user.id),
                         moderator_id=str(interaction.user.id),
                         reason=reason,
-                        guild_id=str(interaction.guild.id) if interaction.guild else None
+                        guild_id=str(found_in_guild.id) if found_in_guild else None
                     )
                     if warning_logged:
-                        print(f"✅ WARNING LOGGED: User {user.id} warning recorded in database")
+                        print(f"✅ WARNING LOGGED: User {target_user.id} warning recorded in database")
                     else:
-                        print(f"❌ WARNING LOG FAILED: Could not record warning for user {user.id}")
+                        print(f"❌ WARNING LOG FAILED: Could not record warning for user {target_user.id}")
                 else:
                     print(f"❌ NO DB_HANDLER: Cannot log warning - database unavailable")
                     warning_logged = False
-                embed = discord.Embed(title="⚠️ User Warning", description=f"{user.mention} has been warned", color=0xffaa00)
+                
+                # Create warning embed with appropriate user display
+                user_display = target_user.mention if hasattr(target_user, 'mention') else f"{target_user.name}#{target_user.discriminator}"
+                warning_type = "Global Warning" if not found_in_guild or found_in_guild != interaction.guild else "Local Warning"
+                
+                embed = discord.Embed(title=f"⚠️ {warning_type}", description=f"{user_display} has been warned", color=0xffaa00)
+                embed.add_field(name="User ID", value=str(target_user.id), inline=True)
+                embed.add_field(name="Username", value=f"{target_user.name}#{target_user.discriminator}", inline=True)
+                embed.add_field(name="Warning Scope", value=warning_type, inline=True)
                 embed.add_field(name="Reason", value=reason, inline=False)
                 embed.add_field(name="Moderator", value=interaction.user.mention, inline=True)
+                embed.add_field(name="Found In", value=found_in_guild.name if found_in_guild else "Global (API)", inline=True)
                 embed.set_footer(text="SynapseChat Moderation")
                 await interaction.followup.send(embed=embed)
                 
@@ -414,15 +548,43 @@ class CrossChatBot(commands.Bot):
                     )
                     dm_embed.add_field(name="Reason", value=reason, inline=False)
                     dm_embed.add_field(name="Moderator", value=str(interaction.user), inline=False)
+                    dm_embed.add_field(name="Warning Type", value=warning_type, inline=False)
                     dm_embed.add_field(name="Note", value="Please follow community guidelines to avoid further action.", inline=False)
                     dm_embed.set_footer(text="SynapseChat Moderation System")
                     
-                    await user.send(embed=dm_embed)
-                    print(f"✅ Warning DM sent to {user.name} ({user.id})")
+                    await target_user.send(embed=dm_embed)
+                    print(f"✅ Warning DM sent to {target_user.name} ({target_user.id})")
                 except Exception as dm_error:
-                    print(f"⚠️ Failed to send warning DM to {user.name}: {dm_error}")
+                    print(f"⚠️ Failed to send warning DM to {target_user.name}: {dm_error}")
                     
-                print(f"MODERATION: {interaction.user} warned {user} for: {reason}")
+                # Determine if this is a local admin action (for webhook ping)
+                is_bot_owner = await self.is_bot_owner(interaction)
+                has_staff_role = False
+                if STAFF_ROLE_ID:
+                    for guild in self.guilds:
+                        member = guild.get_member(interaction.user.id)
+                        if member and any(str(role.id) == str(STAFF_ROLE_ID) for role in member.roles):
+                            has_staff_role = True
+                            break
+                is_local_admin = not is_bot_owner and not has_staff_role and interaction.user.guild_permissions.administrator
+                
+                # Send webhook notification
+                webhook_info = {
+                    "Warning Type": warning_type,
+                    "User Found In": found_in_guild.name if found_in_guild else "Global (API)",
+                    "Database Logged": "✅ Success" if warning_logged else "❌ Failed"
+                }
+                
+                await send_moderation_webhook(
+                    action_type="warning",
+                    moderator_user=interaction.user,
+                    target_user=target_user,
+                    reason=reason,
+                    additional_info=webhook_info,
+                    is_local_admin=is_local_admin
+                )
+                
+                print(f"MODERATION: {interaction.user} warned {target_user.name} ({target_user.id}) for: {reason}")
             except Exception as e:
                 await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
@@ -488,6 +650,34 @@ class CrossChatBot(commands.Bot):
                 except Exception as dm_error:
                     print(f"⚠️ Failed to send ban DM to {user.name}: {dm_error}")
                     
+                # Determine if this is a local admin action (for webhook ping)
+                is_bot_owner = await self.is_bot_owner(interaction)
+                has_staff_role = False
+                staff_role_id = os.environ.get('STAFF_ROLE_ID')
+                if staff_role_id:
+                    for guild in self.guilds:
+                        member = guild.get_member(interaction.user.id)
+                        if member and any(str(role.id) == str(staff_role_id) for role in member.roles):
+                            has_staff_role = True
+                            break
+                is_local_admin = not is_bot_owner and not has_staff_role
+                
+                # Send webhook notification
+                webhook_info = {
+                    "Duration": f"{duration} hours",
+                    "Expires": ban_until.strftime("%Y-%m-%d %H:%M UTC"),
+                    "Database Logged": "✅ Success" if ban_logged else "❌ Failed"
+                }
+                
+                await send_moderation_webhook(
+                    action_type="ban",
+                    moderator_user=interaction.user,
+                    target_user=user,
+                    reason=reason,
+                    additional_info=webhook_info,
+                    is_local_admin=is_local_admin
+                )
+                
                 print(f"MODERATION: {interaction.user} banned {user} for {duration}h: {reason}")
             except Exception as e:
                 await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
@@ -549,9 +739,222 @@ class CrossChatBot(commands.Bot):
                 except Exception as dm_error:
                     print(f"⚠️ Failed to send unban DM to {user.name}: {dm_error}")
                     
+                # Determine if this is a local admin action (for webhook ping)
+                is_bot_owner = await self.is_bot_owner(interaction)
+                has_staff_role = False
+                staff_role_id = os.environ.get('STAFF_ROLE_ID')
+                if staff_role_id:
+                    for guild in self.guilds:
+                        member = guild.get_member(interaction.user.id)
+                        if member and any(str(role.id) == str(staff_role_id) for role in member.roles):
+                            has_staff_role = True
+                            break
+                is_local_admin = not is_bot_owner and not has_staff_role
+                
+                # Send webhook notification
+                webhook_info = {
+                    "Database Status": "✅ Removed" if unban_logged else "❌ Failed"
+                }
+                
+                await send_moderation_webhook(
+                    action_type="unban",
+                    moderator_user=interaction.user,
+                    target_user=user,
+                    reason="Ban removed - user can participate in cross-server messages again",
+                    additional_info=webhook_info,
+                    is_local_admin=is_local_admin
+                )
+                
                 print(f"MODERATION: {interaction.user} unbanned {user}")
             except Exception as e:
                 await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
+
+        @self.tree.command(name="serverban", description="Ban a server from the cross-chat system")
+        @discord.app_commands.describe(
+            server_id="The ID of the server to ban",
+            reason="Reason for the ban"
+        )
+        async def serverban(interaction: discord.Interaction, server_id: str, reason: str = "No reason provided"):
+            """Ban a server from cross-chat system"""
+            # Only bot owner can use serverban command
+            if not await self.is_bot_owner(interaction):
+                await interaction.response.send_message("❌ Only the bot owner can use server ban commands", ephemeral=True)
+                return
+            
+            await interaction.response.defer(ephemeral=True)
+            
+            try:
+                # Validate server ID
+                try:
+                    guild_id = int(server_id)
+                except ValueError:
+                    await interaction.followup.send("❌ Invalid server ID. Please provide a valid numeric server ID.", ephemeral=True)
+                    return
+                
+                # Check if server exists
+                target_guild = self.get_guild(guild_id)
+                guild_name = target_guild.name if target_guild else f"Unknown Server ({guild_id})"
+                
+                # Ban the server in database
+                if self.db_handler and hasattr(self.db_handler, 'db'):
+                    ban_data = {
+                        'server_id': str(guild_id),
+                        'server_name': guild_name,
+                        'reason': reason,
+                        'moderator_id': str(interaction.user.id),
+                        'moderator_name': str(interaction.user),
+                        'timestamp': datetime.utcnow().isoformat()
+                    }
+                    
+                    # Insert server ban
+                    self.db_handler.db.banned_servers.insert_one(ban_data)
+                    
+                    # Log moderation action
+                    self.db_handler.db.moderation_logs.insert_one({
+                        "action_type": "server_ban",
+                        "server_id": str(guild_id),
+                        "moderator_id": str(interaction.user.id),
+                        "reason": reason,
+                        "timestamp": datetime.utcnow()
+                    })
+                    
+                    # Send webhook notification
+                    webhook_info = {
+                        "Server Name": guild_name,
+                        "Server ID": str(guild_id),
+                        "Database Logged": "✅ Success"
+                    }
+                    
+                    await send_moderation_webhook(
+                        action_type="server_ban",
+                        moderator_user=interaction.user,
+                        target_user=interaction.user,  # Use moderator as placeholder
+                        reason=f"Server banned: {reason}",
+                        additional_info=webhook_info,
+                        is_local_admin=False  # Only bot owner can use this
+                    )
+                    
+                    await interaction.followup.send(f"✅ Server `{guild_name}` banned from cross-chat.\n**Reason:** {reason}", ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ Database not available - cannot ban server", ephemeral=True)
+                    
+            except Exception as e:
+                await interaction.followup.send(f"❌ Error banning server: {str(e)}", ephemeral=True)
+                print(f"SERVERBAN: Error: {e}")
+
+        @self.tree.command(name="serverunban", description="Unban a server from the cross-chat system")
+        @discord.app_commands.describe(
+            server_id="The ID of the server to unban"
+        )
+        async def serverunban(interaction: discord.Interaction, server_id: str):
+            """Unban a server from cross-chat system"""
+            if not await self.is_bot_owner(interaction):
+                await interaction.response.send_message("❌ Only the bot owner can use this command.", ephemeral=True)
+                return
+            
+            await interaction.response.defer(ephemeral=True)
+            
+            try:
+                # Validate server ID
+                try:
+                    guild_id = int(server_id)
+                except ValueError:
+                    await interaction.followup.send("❌ Invalid server ID. Please provide a valid numeric server ID.", ephemeral=True)
+                    return
+                
+                # Remove server ban from database
+                if self.db_handler and hasattr(self.db_handler, 'db'):
+                    result = self.db_handler.db.banned_servers.delete_one({"server_id": str(guild_id)})
+                    
+                    if result.deleted_count > 0:
+                        # Log moderation action
+                        self.db_handler.db.moderation_logs.insert_one({
+                            "action_type": "server_unban",
+                            "server_id": str(guild_id),
+                            "moderator_id": str(interaction.user.id),
+                            "reason": "Server unbanned",
+                            "timestamp": datetime.utcnow()
+                        })
+                        
+                        # Send webhook notification
+                        webhook_info = {
+                            "Server ID": str(guild_id),
+                            "Database Status": "✅ Removed"
+                        }
+                        
+                        await send_moderation_webhook(
+                            action_type="server_unban",
+                            moderator_user=interaction.user,
+                            target_user=interaction.user,  # Use moderator as placeholder
+                            reason="Server unban - can participate in cross-chat again",
+                            additional_info=webhook_info,
+                            is_local_admin=False  # Only bot owner can use this
+                        )
+                        
+                        await interaction.followup.send(f"✅ Server `{guild_id}` unbanned from cross-chat system.", ephemeral=True)
+                    else:
+                        await interaction.followup.send(f"⚠️ Server `{guild_id}` was not found in banned servers list.", ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ Database not available - cannot unban server", ephemeral=True)
+                    
+            except Exception as e:
+                await interaction.followup.send(f"❌ Error unbanning server: {str(e)}", ephemeral=True)
+                print(f"SERVERUNBAN: Error: {e}")
+
+        @self.tree.command(name="serverbans", description="List all servers banned from cross-chat")
+        async def serverbans(interaction: discord.Interaction):
+            """List all banned servers"""
+            if not await self.is_bot_owner(interaction):
+                await interaction.response.send_message("❌ Only the bot owner can use this command.", ephemeral=True)
+                return
+            
+            await interaction.response.defer(ephemeral=True)
+            
+            try:
+                if self.db_handler and hasattr(self.db_handler, 'db'):
+                    banned_servers = list(self.db_handler.db.banned_servers.find())
+                    
+                    if not banned_servers:
+                        embed = discord.Embed(
+                            title="📋 Banned Servers",
+                            description="No servers are currently banned from cross-chat.",
+                            color=0x0099ff
+                        )
+                        await interaction.followup.send(embed=embed, ephemeral=True)
+                        return
+                    
+                    embed = discord.Embed(
+                        title="📋 Banned Servers",
+                        description=f"Found {len(banned_servers)} banned server(s):",
+                        color=0xff0000,
+                        timestamp=datetime.utcnow()
+                    )
+                    
+                    for ban_info in banned_servers[:10]:  # Limit to 10 entries
+                        server_id = ban_info.get('server_id', 'Unknown')
+                        server_name = ban_info.get('server_name', f'Unknown ({server_id})')
+                        reason = ban_info.get('reason', 'No reason')
+                        banned_date = ban_info.get('timestamp', 'Unknown')[:10] if ban_info.get('timestamp') else 'Unknown'
+                        moderator = ban_info.get('moderator_name', 'Unknown')
+                        
+                        embed.add_field(
+                            name=f"{server_name}",
+                            value=f"**ID:** {server_id}\n**Reason:** {reason}\n**By:** {moderator}\n**Date:** {banned_date}",
+                            inline=False
+                        )
+                    
+                    if len(banned_servers) > 10:
+                        embed.set_footer(text=f"Showing first 10 of {len(banned_servers)} banned servers")
+                    else:
+                        embed.set_footer(text="SynapseChat Moderation System")
+                    
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ Database not available - cannot list banned servers", ephemeral=True)
+                    
+            except Exception as e:
+                await interaction.followup.send(f"❌ Error listing banned servers: {str(e)}", ephemeral=True)
+                print(f"SERVERBANS: Error: {e}")
 
         @self.tree.command(name="crosschat", description="View crosschat network information and statistics (Owner only)")
         async def crosschat(interaction: discord.Interaction):
@@ -2026,121 +2429,6 @@ class CrossChatBot(commands.Bot):
         except Exception as e:
             print(f"❌ Error processing unban command: {e}")
             return False
-        @self.tree.command(name="serverban", description="Ban a server from the cross-chat system")
-        @discord.app_commands.describe(
-            server_id="The ID of the server to ban",
-            reason="Reason for the ban"
-        )
-        async def serverban(interaction: discord.Interaction, server_id: str, reason: str = "No reason provided"):
-            """Ban a server from cross-chat system"""
-            # Only bot owner can use serverban command
-            if not await self.is_bot_owner(interaction):
-                await interaction.response.send_message("❌ Only authorized staff can use server ban commands", ephemeral=True)
-                return
-            
-            await interaction.response.defer(ephemeral=True)
-            
-            # Execute server ban logic
-            try:
-                # Validate server ID
-                try:
-                    guild_id = int(server_id)
-                except ValueError:
-                    await interaction.followup.send("❌ Invalid server ID. Please provide a valid numeric server ID.", ephemeral=True)
-                    return
-                
-                # Check if server exists
-                target_guild = self.get_guild(guild_id)
-                guild_name = target_guild.name if target_guild else f"Unknown Server ({guild_id})"
-                
-                # Ban the server from crosschat
-                result = await self.execute_unified_command('server_ban', {
-                    'server_id': str(guild_id),
-                    'reason': reason,
-                    'moderator': str(interaction.user)
-                })
-                
-                if result.get('success'):
-                    await interaction.followup.send(f"✅ Server {guild_name} banned from cross-chat for: {reason}", ephemeral=True)
-                else:
-                    await interaction.followup.send(f"❌ Failed to ban server: {result.get('error', 'Unknown error')}", ephemeral=True)
-                    
-            except Exception as e:
-                await interaction.followup.send(f"❌ Error banning server: {str(e)}", ephemeral=True)
-                print(f"SERVERBAN: Error checking SynapseChat Staff role: {e}")
-            
-            if not has_permission:
-                await interaction.followup.send("❌ You need the SynapseChat Staff role to use this command.", ephemeral=True)
-                return
-            
-            try:
-                pass  # MongoDB conversion - no operations needed
-            except Exception as e:
-                pass
-        @self.tree.command(name="serverunban", description="Unban a server from the cross-chat system")
-        @discord.app_commands.describe(
-            server_id="The ID of the server to unban"
-        )
-        async def serverunban(interaction: discord.Interaction, server_id: str):
-            """Unban a server from cross-chat system"""
-            if not await self.is_bot_owner(interaction):
-                await interaction.response.send_message("❌ Only the bot owner can use this command.", ephemeral=True)
-                return
-            
-            try:
-                pass  # MongoDB conversion - no operations needed
-            except Exception as e:
-                pass
-        @self.tree.command(name="serverbans", description="List all servers banned from cross-chat")
-        async def serverbans(interaction: discord.Interaction):
-            """List all banned servers"""
-            if not await self.is_bot_owner(interaction):
-                await interaction.response.send_message("❌ Only the bot owner can use this command.", ephemeral=True)
-                return
-            
-            try:
-                await interaction.response.defer(ephemeral=True)
-                
-                banned_servers = database_storage.get_crosschat_channels()
-                
-                if not banned_servers:
-                    embed = discord.Embed(
-                        title="📋 Banned Servers",
-                        description="No servers are currently banned from cross-chat.",
-                        color=0x0099ff
-                    )
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                    return
-                
-                embed = discord.Embed(
-                    title="📋 Banned Servers",
-                    description=f"Found {len(banned_servers)} banned server(s):",
-                    color=0xff0000,
-                    timestamp=datetime.utcnow()
-                )
-                
-                for server_id, ban_info in list(banned_servers.items())[:10]:  # Limit to 10 entries
-                    server_name = ban_info.get('server_name', f'Unknown ({server_id})')
-                    reason = ban_info.get('reason', 'No reason')
-                    banned_date = ban_info.get('timestamp', 'Unknown')[:10]
-                    moderator = ban_info.get('moderator_name', 'Unknown')
-                    
-                    embed.add_field(
-                        name=f"{server_name}",
-                        value=f"**ID:** {server_id}\n**Reason:** {reason}\n**By:** {moderator}\n**Date:** {banned_date}",
-                        inline=True
-                    )
-                
-                if len(banned_servers) > 10:
-                    embed.set_footer(text=f"Showing 10 of {len(banned_servers)} banned servers")
-                else:
-                    embed.set_footer(text="SynapseChat Moderation System")
-                
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                
-            except Exception as e:
-                await interaction.followup.send(f"❌ Error listing banned servers: {str(e)}", ephemeral=True)
-                print(f"Error in serverbans command: {e}")
 
         @self.tree.command(name="eval", description="Execute Python code (Bot Owner Only)")
         @discord.app_commands.describe(
