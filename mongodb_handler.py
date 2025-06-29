@@ -466,6 +466,48 @@ class MongoDBHandler:
     def get_message_count(self):
         """Alias for get_chatlog_count"""
         return self.get_chatlog_count()
+    
+    def remove_guild_data(self, guild_id: str) -> bool:
+        """Remove all guild-related data from MongoDB when bot leaves a guild"""
+        try:
+            if not self._ensure_connected():
+                print(f"❌ MONGODB: Cannot remove guild data - no connection")
+                return False
+            
+            guild_id_str = str(guild_id)
+            removed_count = 0
+            
+            # Remove crosschat channels for this guild
+            result = self.db.crosschat_channels.delete_many({"guild_id": guild_id_str})
+            removed_count += result.deleted_count
+            print(f"✅ MONGODB: Removed {result.deleted_count} crosschat channels for guild {guild_id}")
+            
+            # Remove guild info
+            result = self.db.guild_info.delete_many({"guild_id": guild_id_str})
+            removed_count += result.deleted_count
+            print(f"✅ MONGODB: Removed {result.deleted_count} guild info entries for guild {guild_id}")
+            
+            # Keep crosschat messages - they are part of the network history
+            # Only remove guild-specific administrative data
+            print(f"✅ MONGODB: Crosschat messages preserved - they are part of network history")
+            
+            # Keep user warnings - they are part of moderation history
+            # Warnings should persist across the network for accountability
+            print(f"✅ MONGODB: User warnings preserved - they are part of moderation history")
+            
+            # Remove guild-specific moderation logs
+            result = self.db.moderation_logs.delete_many({"guild_id": guild_id_str})
+            removed_count += result.deleted_count
+            print(f"✅ MONGODB: Removed {result.deleted_count} moderation logs for guild {guild_id}")
+            
+            print(f"✅ MONGODB: Total cleanup complete - removed {removed_count} documents for guild {guild_id}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ MONGODB ERROR: Failed to remove guild data for {guild_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
 # Global instance
 mongo_handler = MongoDBHandler()
