@@ -67,8 +67,9 @@ DATABASE_AVAILABLE = DATABASE_TYPE == 'mongodb'
 # Simple Discord logging - sends summary every 60 seconds
 CONSOLE_LOG_CHANNEL_ID = 1386454256000831731
 
-# Moderation webhook configuration
+# Webhook configuration
 MODERATION_WEBHOOK_URL = os.environ.get('MODERATION_WEBHOOK_URL')
+GUILD_WEBHOOK_URL = os.environ.get('GUILD_WEBHOOK_URL')
 STAFF_ROLE_ID = os.environ.get('STAFF_ROLE_ID')
 
 async def send_moderation_webhook(action_type: str, moderator_user, target_user, reason: str, additional_info: dict = None, is_local_admin: bool = False):
@@ -145,6 +146,111 @@ async def send_moderation_webhook(action_type: str, moderator_user, target_user,
                     
     except Exception as webhook_error:
         print(f"❌ Webhook error: {webhook_error}")
+        return False
+
+async def send_guild_webhook(event_type: str, guild, additional_info: dict = None):
+    """Send guild join/leave notification to webhook with detailed server information"""
+    if not GUILD_WEBHOOK_URL:
+        print("⚠️ GUILD_WEBHOOK_URL not configured - guild webhook logging disabled")
+        return False
+    
+    try:
+        # Determine event color
+        colors = {
+            "join": 0x00ff00,    # Green for joins
+            "leave": 0xff0000    # Red for leaves
+        }
+        color = colors.get(event_type.lower(), 0x0099ff)
+        
+        # Get server creation date
+        created_at = guild.created_at.strftime("%Y-%m-%d %H:%M UTC")
+        
+        # Get server owner info
+        owner_info = "Unknown"
+        if guild.owner:
+            owner_info = f"{guild.owner.name}#{guild.owner.discriminator}\nID: `{guild.owner.id}`"
+        
+        # Get server icon
+        icon_url = guild.icon.url if guild.icon else None
+        
+        # Build comprehensive embed
+        embed = {
+            "title": f"🏰 Guild {'Joined' if event_type == 'join' else 'Left'}: {guild.name}",
+            "color": color,
+            "timestamp": datetime.utcnow().isoformat(),
+            "fields": [
+                {
+                    "name": "Server Name",
+                    "value": guild.name,
+                    "inline": True
+                },
+                {
+                    "name": "Server ID",
+                    "value": f"`{guild.id}`",
+                    "inline": True
+                },
+                {
+                    "name": "Member Count",
+                    "value": f"{guild.member_count:,} members",
+                    "inline": True
+                },
+                {
+                    "name": "Server Owner",
+                    "value": owner_info,
+                    "inline": True
+                },
+                {
+                    "name": "Server Created",
+                    "value": created_at,
+                    "inline": True
+                },
+                {
+                    "name": "Verification Level",
+                    "value": str(guild.verification_level).replace('_', ' ').title(),
+                    "inline": True
+                }
+            ]
+        }
+        
+        # Add server icon if available
+        if icon_url:
+            embed["thumbnail"] = {"url": icon_url}
+        
+        # Add total guild count (need to access bot instance)
+        try:
+            # Get bot reference from global scope
+            total_guilds = len(bot.guilds) if 'bot' in globals() else "Unknown"
+            embed["fields"].append({
+                "name": "Total Guilds",
+                "value": f"Bot now in {total_guilds:,} servers" if isinstance(total_guilds, int) else "Bot guild count unavailable",
+                "inline": False
+            })
+        except:
+            pass
+        
+        # Add additional info if provided
+        if additional_info:
+            for key, value in additional_info.items():
+                embed["fields"].append({
+                    "name": key,
+                    "value": str(value),
+                    "inline": True
+                })
+        
+        # Send webhook
+        webhook_data = {"embeds": [embed]}
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(GUILD_WEBHOOK_URL, json=webhook_data) as response:
+                if response.status == 204:
+                    print(f"✅ Guild {event_type} webhook sent successfully for {guild.name}")
+                    return True
+                else:
+                    print(f"⚠️ Guild webhook failed with status {response.status}")
+                    return False
+                    
+    except Exception as e:
+        print(f"❌ Error sending guild webhook: {e}")
         return False
 
 class SimpleDiscordLogger:
@@ -332,7 +438,7 @@ class CrossChatBot(commands.Bot):
 
         @self.tree.command(name="announce", description="Send announcement to all cross-chat channels (Owner/Staff only)")
         @discord.app_commands.describe(
-            message="Announcement message (supports markdown & multiline: use \\n for new lines, **bold**, *italic*, `code`, etc.)",
+            message="Announcement message (use \\n for line breaks. Format each line separately: **Title**\\n\\nRegular text\\n\\n**Another bold line**)",
             anonymous="Send announcement anonymously"
         )
         async def announce(interaction: discord.Interaction, message: str, anonymous: bool = False):
@@ -2030,10 +2136,35 @@ class CrossChatBot(commands.Bot):
         """Called when the bot joins a new guild"""
         print(f"📈 Joined new guild: {guild.name} (ID: {guild.id})")
         await self.update_single_guild_info(guild)
+        
+        # Send webhook notification for guild join
+        await send_guild_webhook("join", guild, {
+            "Bot Permissions": f"{guild.me.guild_permissions.value:,}" if guild.me else "Unknown",
+            "Bot Highest Role": guild.me.top_role.name if guild.me and guild.me.top_role else "Unknown"
+        })
 
     async def on_guild_remove(self, guild):
         """Called when the bot leaves a guild"""
         print(f"📉 Left guild: {guild.name} (ID: {guild.id})")
+        
+        # Clean up MongoDB database for this guild
+        try:
+            if hasattr(self, 'db_handler') and self.db_handler:
+                cleanup_success = self.db_handler.remove_guild_data(str(guild.id))
+                if cleanup_success:
+                    print(f"✅ Database cleanup completed for guild {guild.name}")
+                else:
+                    print(f"⚠️ Database cleanup failed for guild {guild.name}")
+            else:
+                print("⚠️ No database handler available for cleanup")
+        except Exception as e:
+            print(f"❌ Error during database cleanup for guild {guild.name}: {e}")
+        
+        # Send webhook notification for guild leave
+        await send_guild_webhook("leave", guild, {
+            "Reason": "Bot removed or guild deleted",
+            "Previous Member Count": f"{guild.member_count:,} members" if guild.member_count else "Unknown"
+        })
 
     async def is_owner_or_admin(self, ctx) -> bool:
         """Check if user is bot owner, server administrator, or has official staff role"""
