@@ -509,5 +509,42 @@ class MongoDBHandler:
             traceback.print_exc()
             return False
 
+    def cleanup_guild_data(self, guild_id: str) -> bool:
+        """Clean up guild-specific data when bot leaves guild - preserves network history"""
+        try:
+            if not self._ensure_connected():
+                print(f"❌ MONGODB: Cannot cleanup guild data - no connection")
+                return False
+            
+            guild_id_str = str(guild_id)
+            removed_count = 0
+            
+            print(f"🧹 GUILD_CLEANUP: Starting cleanup for guild {guild_id}")
+            
+            # Remove crosschat channels for this guild (guild-specific administrative data)
+            result = self.db.crosschat_channels.delete_many({"guild_id": guild_id_str})
+            removed_count += result.deleted_count
+            print(f"✅ GUILD_CLEANUP: Removed {result.deleted_count} crosschat channels for guild {guild_id}")
+            
+            # Remove guild-specific moderation logs (administrative data)
+            result = self.db.moderation_logs.delete_many({"guild_id": guild_id_str})
+            removed_count += result.deleted_count
+            print(f"✅ GUILD_CLEANUP: Removed {result.deleted_count} moderation logs for guild {guild_id}")
+            
+            # PRESERVE crosschat messages - they are network-wide history, not guild-specific
+            print(f"✅ GUILD_CLEANUP: Crosschat messages preserved - network history maintained")
+            
+            # PRESERVE user warnings - they are network-wide moderation history for accountability
+            print(f"✅ GUILD_CLEANUP: User warnings preserved - moderation accountability maintained")
+            
+            print(f"✅ GUILD_CLEANUP: Cleanup complete - removed {removed_count} guild-specific documents, preserved network history")
+            return True
+            
+        except Exception as e:
+            print(f"❌ GUILD_CLEANUP ERROR: Failed to cleanup guild data for {guild_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
 # Global instance
 mongo_handler = MongoDBHandler()
