@@ -2718,6 +2718,66 @@ class CrossChatBot(commands.Bot):
             print("Bot restart initiated by owner")
             await self.close()
 
+        @self.tree.command(name="leaveguild", description="Force bot to leave a specific server (Owner Only)")
+        @discord.app_commands.describe(
+            guild_id="The ID of the server to leave",
+            reason="Reason for leaving the server"
+        )
+        async def leave_guild(interaction: discord.Interaction, guild_id: str, reason: str = "Forced leave by owner"):
+            """Force the bot to leave a specific guild"""
+            if not await self.is_bot_owner(interaction):
+                await interaction.response.send_message("❌ Only the bot owner can use this command.", ephemeral=True)
+                return
+            
+            try:
+                guild_id_int = int(guild_id)
+                guild = self.get_guild(guild_id_int)
+                
+                if not guild:
+                    await interaction.response.send_message(f"❌ Guild with ID `{guild_id}` not found or bot is not in that server.", ephemeral=True)
+                    return
+                
+                guild_name = guild.name
+                member_count = guild.member_count
+                
+                # Confirm the action
+                embed = discord.Embed(
+                    title="⚠️ Confirm Guild Leave",
+                    description=f"Are you sure you want to force the bot to leave **{guild_name}**?",
+                    color=0xff9900
+                )
+                embed.add_field(name="Guild ID", value=f"`{guild_id}`", inline=True)
+                embed.add_field(name="Member Count", value=f"{member_count:,}" if member_count else "Unknown", inline=True)
+                embed.add_field(name="Reason", value=reason, inline=False)
+                embed.set_footer(text="This action cannot be undone. Database cleanup will be performed automatically.")
+                
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+                
+                # Leave the guild after a short delay
+                import asyncio
+                await asyncio.sleep(2)
+                
+                print(f"OWNER_COMMAND: Forcing bot to leave guild {guild_name} ({guild_id}) - Reason: {reason}")
+                await guild.leave()
+                
+                # Send follow-up confirmation
+                success_embed = discord.Embed(
+                    title="✅ Successfully Left Guild",
+                    description=f"Bot has left **{guild_name}**",
+                    color=0x00ff00
+                )
+                success_embed.add_field(name="Guild ID", value=f"`{guild_id}`", inline=True)
+                success_embed.add_field(name="Reason", value=reason, inline=True)
+                success_embed.set_footer(text="Database cleanup performed automatically")
+                
+                await interaction.followup.send(embed=success_embed, ephemeral=True)
+                
+            except ValueError:
+                await interaction.response.send_message(f"❌ Invalid guild ID: `{guild_id}`. Must be a valid Discord server ID.", ephemeral=True)
+            except Exception as e:
+                await interaction.response.send_message(f"❌ Error leaving guild: {str(e)}", ephemeral=True)
+                print(f"ERROR: Failed to leave guild {guild_id}: {e}")
+
         @self.tree.command(name="guilds", description="List all servers the bot is in (Owner Only)")
         async def guilds(interaction: discord.Interaction):
             """List all guilds the bot is connected to"""
